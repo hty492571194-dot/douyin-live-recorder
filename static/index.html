@@ -1,0 +1,2947 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="e88t4afFgzAsq4awFIREX5">
+<head data-page-node-id="kTXpb7FFj45pPxHvNHFcto">
+<meta charset="UTF-8" data-page-node-id="fSesX8F25gdZHbTq9jBasq">
+<meta name="viewport" content="width=device-width, initial-scale=1" data-page-node-id="wL9KrsUtd6S63jHHxGn8em">
+<title>抖音直播监控 · 控制台</title>
+<style>
+:root {
+  --bg: #0d0f14; --sidebar: #12151d; --panel: #171b24; --panel-2: #1d222d;
+  --border: #262c38; --text: #e6e9f0; --muted: #8b94a7;
+  --accent: #5b8cff; --accent-2: #7aa2ff;
+  --ok: #34d399; --warn: #fbbf24; --danger: #f87171;
+  --radius: 12px;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px; line-height: 1.5; }
+.layout { display: flex; min-height: 100vh; }
+
+/* ── 侧边栏 ── */
+aside { width: 220px; flex-shrink: 0; background: var(--sidebar);
+  border-right: 1px solid var(--border); padding: 20px 12px; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 18px;
+  font-size: 15px; font-weight: 600; }
+.brand .logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), #9a5bff);
+  display: flex; align-items: center; justify-content: center; font-size: 14px; color: #fff; }
+.brand .sub { font-size: 11px; color: var(--muted); font-weight: 400; margin-top: 1px; }
+.nav-item { display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 10px 12px; margin: 2px 0; border-radius: 8px; border: 0;
+  background: transparent; color: var(--muted); font-size: 14px; cursor: pointer;
+  text-align: left; transition: background .15s, color .15s; }
+.nav-item:hover { background: var(--panel-2); color: var(--text); }
+.nav-item.active { background: rgba(91, 140, 255, .14); color: var(--accent-2); font-weight: 500; }
+.nav-item .ic { width: 18px; text-align: center; }
+.nav-item .chev { margin-left: auto; font-size: 11px; transition: transform .2s; }
+.nav-group.open .chev { transform: rotate(180deg); }
+.nav-sub { max-height: 0; overflow: hidden; transition: max-height .22s ease; }
+.nav-group.open .nav-sub { max-height: 120px; }
+.nav-item.sub { padding-left: 40px; font-size: 13px; }
+.nav-item.sub .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); }
+.nav-item.sub.active .dot { background: var(--accent-2); }
+.side-foot { margin-top: 24px; padding: 12px; border-top: 1px solid var(--border);
+  font-size: 11px; color: var(--muted); line-height: 1.6; }
+
+/* ── 服务控制(启 / 停 / 重启) ── */
+.svc-row { display: flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--text); margin-bottom: 10px; }
+.svc-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+.svc-dot.on { background: var(--ok); box-shadow: 0 0 0 3px rgba(52, 211, 153, .15); }
+.svc-dot.off { background: var(--danger); box-shadow: 0 0 0 3px rgba(248, 113, 113, .15); }
+.svc-btns { display: flex; gap: 6px; }
+.svc-btns .btn { flex: 1; padding: 6px 0; font-size: 12px; font-weight: 500; border-radius: 8px; }
+/* 默认 hover 是危险色(红),这里改为中性蓝;只有「关闭」保留红色警示 */
+.svc-btns .btn-ghost:hover { color: var(--accent-2); border-color: var(--accent-2); }
+.svc-btns .btn-danger:hover { color: var(--danger); border-color: var(--danger); }
+.svc-btns .btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+.svc-meta { margin-top: 8px; }
+
+/* ── 主区域 ──
+   主播管理需要横向三列(卡宽 450px),故主区整体放宽到 1440px;
+   其余视图用 .view 上的 896px 收窄回去,保持与原来 960-64 一致的排版。 */
+main { flex: 1; padding: 26px 32px; max-width: 1440px; }
+.view:not(#view-streamers) { max-width: 896px; }
+.view { display: none; }
+.view.active { display: block; animation: fade .18s ease; }
+@keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.view-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 20px; }
+.view-head h1 { font-size: 18px; font-weight: 600; margin: 0; }
+.view-head .desc { font-size: 13px; color: var(--muted); }
+
+/* ── 卡片 ── */
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 20px; margin-bottom: 20px; }
+.card-title { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: none;
+  margin: 0 0 16px; letter-spacing: .3px; }
+
+/* ── 启动自检横幅 ── */
+#setup-banner { border-left: 4px solid var(--warn); padding: 16px 20px; }
+#setup-banner.fail { border-left-color: var(--danger); }
+#setup-banner.hidden { display: none; }
+#setup-banner .card-title { margin-bottom: 10px; }
+#setup-banner .banner-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+#setup-banner .banner-head .card-title { margin-bottom: 0; }
+#setup-banner .banner-head .btn { padding: 4px 12px; font-size: 12px; }
+#setup-banner.collapsed .banner-items { display: none; }
+.banner-item { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0;
+  border-bottom: 1px solid var(--border); font-size: 13px; }
+.banner-item:last-child { border-bottom: 0; }
+.banner-item .bdot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+.banner-item .bdot.warn { background: var(--warn); }
+.banner-item .bdot.fail { background: var(--danger); }
+.banner-item .bdot.ok { background: var(--ok); }
+.banner-body { flex: 1; color: var(--text); }
+.banner-body b { color: var(--text); }
+.banner-action { display: inline-block; margin-left: 8px; color: var(--accent-2); font-size: 12px; }
+.banner-item[data-id="cookie"], .banner-item[data-id="nas"], .banner-item[data-id="archive"] { cursor: pointer; }
+.banner-item[data-id="cookie"]:hover, .banner-item[data-id="nas"]:hover, .banner-item[data-id="archive"]:hover { background: var(--panel-2); }
+
+/* ── 主播管理 ── */
+.add-form { display: flex; gap: 10px; margin-bottom: 18px; }
+.add-form input { flex: 1; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; font-size: 14px;
+  outline: none; transition: border .15s; }
+.add-form input:focus { border-color: var(--accent); }
+.add-form input::placeholder { color: var(--muted); }
+.btn { border: 0; border-radius: 10px; padding: 10px 18px; font-size: 14px; font-weight: 600;
+  cursor: pointer; transition: transform .05s, opacity .15s; white-space: nowrap; }
+.btn:active { transform: scale(.97); }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent-2); }
+.btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+.btn-ghost:hover { color: var(--danger); border-color: var(--danger); }
+
+/* ── 主播管理:网格卡片(折叠态约 19:6 宽高比) ── */
+/* 三列网格:视口够宽时固定 3 列(卡宽约 450px),窄屏依次降为 2 列、1 列,
+   避免卡片被压到文字放不下。 */
+#streamer-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1400px) { #streamer-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 900px)  { #streamer-list { grid-template-columns: minmax(0, 1fr); } }
+.streamer { display: flex; flex-direction: column; background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+.streamer:hover { border-color: #33405a; }
+/* 横幅区:头像绝对定位铺满左侧 45%(卡宽 450px 时约 202px),
+   右缘用渐变遮罩羽化融入背景。刻意不用 filter: blur —— 本页有实时状态
+   轮询,模糊滤镜会被反复重绘、白耗 GPU,渐变遮罩视觉等价但零开销。
+   min-height 196px = 方案 B「沉浸高卡」:多出的高度用于展示调度信息行。 */
+/* flex:1 —— 网格会把同一行的卡片拉伸到等高(默认 align-items:stretch),
+   但横幅区作为列向 flex 子项默认不吸收多余高度,结果「在播卡 246px / 待机卡
+   198px」时待机卡的头像仍只有 198px 高,横向并排明显一高一矮。
+   让横幅区吃掉剩余高度,头像层的 top:0/bottom:0 才能跟着卡片一起长高。
+   内容保持顶部对齐、操作按钮靠 margin-top:auto 贴底,多出的空间落在中间。 */
+.s-banner { position: relative; display: flex; flex-direction: column; gap: 7px;
+  flex: 1 1 auto;
+  padding: 13px 14px 13px calc(41% + 2px); min-height: 196px; }
+/* 头像层是 absolute,会盖在同层的普通流文字之上;让文字行参与定位并抬高一层,
+   文字才能安全地压进羽化区尾部(否则文字会被头像图盖住)。 */
+.s-banner > *:not(.s-avlayer) { position: relative; z-index: 1; }
+/* 头像羽化改用 mask 直接把图本身淡出,不再叠一层「渐变到背景色」的遮罩。
+   好处:羽化结束处就是纯背景,文字可以紧贴着排,不用再留出遮罩宽度的空白。 */
+.s-avlayer { position: absolute; left: 0; top: 0; bottom: 0; width: 45%; z-index: 0;
+  overflow: hidden; cursor: pointer;
+  background: linear-gradient(135deg, #33405a, #1d222d);
+  -webkit-mask-image: linear-gradient(to right, #000 0 58%, transparent 93%);
+  mask-image: linear-gradient(to right, #000 0 58%, transparent 93%); }
+/* 右侧被羽化吃掉后,可见区的「加权重心」落在容器 38.4% 处(实心段 0~58%
+   权重 1、渐隐段 58%~93% 权重线性降到 0,加权平均算出来的),而不是正中的 50%。
+   主体(人物通常在原图中央)因此看起来偏右,所以放大一点的同时把图向左推,
+   让主体回到视觉中心。scale 是必需的:单纯左移会让左边露白。
+   10% 的位移经 1.14 倍放大后正好是 -11.6%,左右两侧都仍溢出、不露底。 */
+.s-avlayer img { width: 100%; height: 100%; object-fit: cover; display: block;
+  transform: scale(1.14) translateX(-10%); }
+.s-av-init { width: 100%; height: 100%; display: flex; align-items: center;
+  justify-content: center; font-weight: 600; font-size: 48px; color: #fff; opacity: .86;
+  transform: translateX(-11%); }
+.s-top { display: flex; align-items: center; gap: 12px; }
+.s-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.s-name-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* 姓名吃掉剩余宽度、徽章被顶到行尾。之前姓名是默认 flex 行为(可被压到 16px),
+   加上徽章与右侧状态块三方抢空间,长姓名直接被压成「小…」。现在徽章 flex-shrink:0
+   保形,姓名自己承担省略,谁都不会挤到别人身上。 */
+.s-name { flex: 1 1 auto; min-width: 0; font-weight: 600; font-size: 16px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s-name-row .badge { flex-shrink: 0; }
+/* 抖音号胶囊:点击即复制。原实现是纯文本行,不能交互,取用 ID 还得展开详情
+   再点「复制」。这里让展示区本身成为复制入口,复制后置灰为绿色对勾。 */
+.s-dyid { align-self: flex-start; max-width: 100%; display: inline-flex; align-items: center; gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+  padding: 3px 9px; border-radius: 7px; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--border); color: var(--muted);
+  transition: border-color .12s, color .12s, background .12s; }
+.s-dyid:hover { border-color: var(--accent-2); color: var(--accent-2); background: rgba(91,140,255,.10); }
+.s-dyid .dy-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s-dyid .dy-ic { flex-shrink: 0; opacity: .55; font-size: 11px; }
+.s-dyid:hover .dy-ic { opacity: 1; }
+.s-dyid.copied { border-color: var(--ok); color: var(--ok); background: rgba(34,197,94,.12); }
+.s-dyid.copied .dy-ic { opacity: 1; }
+.s-dyid.none { cursor: default; opacity: .65; }
+.s-dyid.none:hover { border-color: var(--border); color: var(--muted); background: var(--panel); }
+/* 卡面调度信息行(方案 B 新增):不展开详情也能看到下次检测与热点窗口 */
+.s-sched { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
+.s-sched b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+/* 卡面「自动录制」开关 + 备注行。
+   开关用「隐藏的原生 checkbox + 自画轨道」:原生 checkbox 各浏览器尺寸/基线
+   不一,在 12px 小字号行里会歪;自画后 17px 高的轨道跟文字对齐可控。
+   关掉自动录制 = 只检测不录制,开播后仍可手动点「开始」录这一场。 */
+.s-extra { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ar-sw { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
+  cursor: pointer; user-select: none; font-size: 12px; color: var(--muted); }
+.ar-sw input { position: absolute; width: 0; height: 0; opacity: 0; }
+.ar-track { position: relative; width: 30px; height: 17px; border-radius: 9px; flex-shrink: 0;
+  background: #2b3242; border: 1px solid var(--border); transition: background .15s, border-color .15s; }
+.ar-dot { position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%;
+  background: var(--muted); transition: transform .15s, background .15s; }
+.ar-sw input:checked + .ar-track { background: rgba(52, 211, 153, .22); border-color: var(--ok); }
+.ar-sw input:checked + .ar-track .ar-dot { transform: translateX(13px); background: var(--ok); }
+.ar-sw input:checked ~ .ar-txt { color: var(--ok); }
+.ar-sw input:focus-visible + .ar-track { border-color: var(--accent-2); }
+.ar-sw:hover .ar-track { border-color: #3d475c; }
+.ar-txt { white-space: nowrap; }
+/* 备注按钮:卡面上只占一格,有内容时右上角点个绿点做记号。
+   不把备注文字铺在卡面 —— 长短不一的句子会把同行卡片撑得高低不齐。 */
+.s-note-btn { margin-left: auto; padding: 3px 10px; font-size: 12px; position: relative; }
+.s-note-btn.has { color: var(--ok); border-color: rgba(52, 211, 153, .45); }
+.s-note-btn.has::after { content: ""; position: absolute; top: 4px; right: 5px;
+  width: 5px; height: 5px; border-radius: 50%; background: var(--ok); }
+/* 备注悬浮窗:复用预览图的弹层骨架,只在宽度与输入区上做文章 */
+.note-box { width: min(420px, 92vw); }
+#note-text { width: 100%; resize: vertical; padding: 10px 12px; font-family: inherit;
+  font-size: 13px; line-height: 1.6; color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 10px; outline: none; }
+#note-text:focus { border-color: var(--accent-2); }
+.note-foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.note-foot .hint { flex: 1; min-width: 0; font-size: 11px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-count { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* 备注:常驻输入框方案已废弃(卡面文字长短不一会顶乱排版),改为悬浮窗编辑。
+   这里只留按钮样式;悬浮窗骨架复用 .modal / .modal-box。 */
+.s-meta { display: flex; gap: 16px; font-size: 12px; color: var(--muted); }
+.s-meta b { color: var(--text); font-weight: 500; }
+
+/* ── 项目指引 ── */
+.guide-group + .guide-group { margin-top: 18px; }
+.guide-group-title { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.guide-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.guide-item { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  padding: 11px 13px; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 10px; cursor: pointer; transition: border-color .12s, background .12s; }
+.guide-item:hover { border-color: var(--accent-2); background: #232936; }
+.guide-item .gi-ic { flex: 0 0 30px; height: 30px; border-radius: 8px; display: flex;
+  align-items: center; justify-content: center; font-size: 14px;
+  background: rgba(91, 140, 255, .14); color: var(--accent-2); }
+.guide-item .gi-main { flex: 1 1 auto; min-width: 0; }
+.guide-item .gi-name, .guide-item .gi-path { display: block; }
+.guide-item .gi-name { font-size: 13px; color: var(--text); }
+.guide-item .gi-path { font-size: 11px; color: var(--muted); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, Menlo, monospace; }
+.guide-item.disabled { opacity: .5; cursor: not-allowed; }
+.guide-item.disabled:hover { border-color: var(--border); background: var(--panel-2); }
+.guide-item.disabled .gi-ic { background: rgba(139, 148, 167, .14); color: var(--muted); }
+.guide-tree { font-size: 13px; color: var(--muted); line-height: 2; }
+.guide-tree b { color: var(--text); font-weight: 500; }
+
+/* 系统健康面板 */
+.h-sum { font-size: 12px; color: var(--muted); font-weight: 400; }
+.h-group { margin-top: 16px; }
+.h-group-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.h-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px; margin-top: 8px; }
+.h-item { display: grid; grid-template-columns: auto 1fr; gap: 10px 10px;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel-2); }
+.h-item.ok { border-color: rgba(52, 211, 153, .28); }
+.h-item.warn { border-color: rgba(251, 191, 36, .45); }
+.h-item.down { border-color: rgba(248, 113, 113, .55); background: rgba(248, 113, 113, .06); }
+.h-item.idle { opacity: .72; }
+.h-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block;
+  flex-shrink: 0; margin-top: 4px; }
+.h-dot.ok { background: var(--ok); box-shadow: 0 0 7px rgba(52, 211, 153, .55); }
+.h-dot.warn { background: var(--warn); box-shadow: 0 0 7px rgba(251, 191, 36, .55); }
+.h-dot.down { background: var(--danger); box-shadow: 0 0 7px rgba(248, 113, 113, .6);
+  animation: h-pulse 1.4s ease-in-out infinite; }
+.h-dot.idle { background: var(--muted); opacity: .55; }
+@keyframes h-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.h-main { min-width: 0; }
+.h-name { font-size: 13px; font-weight: 500; color: var(--text);
+  display: flex; align-items: center; gap: 6px; }
+.h-count { font-size: 11px; color: var(--muted); font-weight: 400; }
+.h-desc { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.h-foot { grid-column: 2; display: flex; align-items: baseline; gap: 8px;
+  flex-wrap: wrap; margin-top: 4px; }
+.h-detail { font-size: 11px; color: var(--text); opacity: .85; }
+.h-item.warn .h-detail { color: var(--warn); }
+.h-item.down .h-detail { color: var(--danger); }
+.h-age { font-size: 11px; color: var(--muted);
+  font-family: ui-monospace, Menlo, monospace; }
+
+/* 快捷指令表(系统健康页):命令格可点击复制,沿用抖音号胶囊那套「点了变绿对勾」 */
+.sc-table { width: 100%; border-collapse: collapse; }
+.sc-table th { text-align: left; font-size: 11px; font-weight: 500; color: var(--muted);
+  padding: 0 12px 6px 0; border-bottom: 1px solid var(--border); }
+.sc-table th:last-child, .sc-table td:last-child { padding-right: 0; }
+.sc-table td { padding: 7px 12px 7px 0; border-bottom: 1px solid var(--border);
+  vertical-align: top; }
+.sc-table tr:last-child td { border-bottom: none; }
+.sc-cmd { display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+  padding: 2px 8px; border-radius: 7px; cursor: pointer; white-space: nowrap;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  transition: border-color .12s, color .12s, background .12s; }
+.sc-cmd:hover { border-color: var(--accent-2); color: var(--accent-2);
+  background: rgba(91,140,255,.10); }
+.sc-cmd .dy-ic { flex-shrink: 0; opacity: .5; font-size: 10px; }
+.sc-cmd:hover .dy-ic { opacity: 1; }
+.sc-cmd.copied { border-color: var(--ok); color: var(--ok); background: rgba(34,197,94,.12); }
+.sc-cmd.copied .dy-ic { opacity: 1; }
+.sc-alias { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; color: var(--muted); white-space: nowrap; }
+.sc-fx { font-size: 12px; color: var(--muted); }
+.sc-sub { margin-top: 14px; font-size: 11.5px; color: var(--muted); line-height: 1.9; }
+.sc-sub b { color: var(--text); font-weight: 500; }
+.sc-sub code, .sc-install code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; padding: 1px 6px; border-radius: 5px;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text); }
+.sc-install { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);
+  font-size: 11.5px; color: var(--muted); }
+.sc-warn code { border-color: rgba(251,191,36,.45); }
+
+/* 孤儿目录清理台账 */
+.rt-list { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.rt-item { display: grid; grid-template-columns: minmax(80px, auto) 1fr auto;
+  align-items: center; gap: 10px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
+.rt-item .rt-name { color: var(--text); font-weight: 500; }
+.rt-item .rt-dirs { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+.rt-item .rt-sub { grid-column: 2 / 4; color: var(--muted); font-size: 11px; margin-top: 2px; }
+.rt-tag { padding: 2px 8px; border-radius: 999px; font-size: 11px; white-space: nowrap; }
+.rt-tag.wait  { background: rgba(139,148,167,.14); color: var(--muted); }
+.rt-tag.ready { background: rgba(63,185,80,.16); color: #3fb950; }
+.rt-tag.block { background: rgba(210,153,34,.16); color: #d2991a; }
+.rt-tag.ok    { background: rgba(88,166,255,.16); color: #58a6ff; }
+/* 状态行:录制状态(主) + 上次开播(次)。原先它跟姓名、徽章挤在同一行右侧,
+   三列卡里文字区只有 208px,三个元素互相抢空间导致姓名被压成省略号。
+   独立成一行后各行只放自己的内容,不再有横向竞争。 */
+.s-state { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.st-rec-state { font-weight: 600; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.st-rec-state.on { color: var(--ok); }
+.st-rec-state.rec { color: var(--danger); }
+.st-recent { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 2px; }
+.s-actions .btn { padding: 4px 10px; font-size: 12px; }
+.s-rec { font-size: 12px; color: var(--ok); display: flex; flex-direction: column; gap: 3px; }
+.s-rec b { color: var(--ok); font-weight: 600; }
+.rec-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rec-sub { color: var(--muted); font-size: 11px; }
+.rec-warn { margin-top: 3px; font-size: 11px; color: #fbbf24; }
+.rec-warn b { color: #fca5a5; }
+.rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex-shrink: 0; animation: recBlink 1.2s infinite; }
+.rec-path { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.rec-path:hover { color: var(--text); text-decoration: underline; }
+/* 路径面包屑:长路径按 / 拆成可点胶囊,避免撑破卡片。
+   flex 布局 + min-width:0 是省略号生效的前提 —— 行内元素上的
+   text-overflow 与 max-width 均不生效,这正是原实现溢出卡片的原因。 */
+.rec-path-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.rp-lbl { flex-shrink: 0; }
+.pm-chips { display: inline-flex; align-items: center; gap: 3px; flex: 1; min-width: 0; overflow: hidden; cursor: pointer; }
+.pm-chip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+  padding: 1px 5px; border-radius: 5px; background: var(--panel); color: var(--muted);
+  max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex-shrink: 1; min-width: 0; transition: background .12s, color .12s; }
+.pm-chip.is-seg { background: rgba(91,140,255,.12); color: var(--accent-2); }
+.pm-chip.is-last { background: rgba(91,140,255,.20); color: #a8c4ff; flex-shrink: 0; max-width: 200px; }
+.pm-chip.is-root { color: var(--muted); }
+.pm-chip:hover { background: rgba(91,140,255,.34); color: #dbe6ff; text-decoration: none; }
+.pm-sep { color: var(--muted); opacity: .45; flex-shrink: 0; }
+.btn-rec[data-action="stop"] { color: var(--danger); border-color: var(--danger); }
+@keyframes recBlink { 0%, 100% { opacity: 1; } 50% { opacity: .2; } }
+
+/* ── 主播列表工具条:搜索 + 排序 ── */
+.str-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.tb-search { position: relative; flex: 0 1 280px; min-width: 190px; }
+.tb-search input { width: 100%; padding: 7px 10px 7px 30px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--border); color: var(--text); font-size: 13px; }
+.tb-search input:focus { outline: none; border-color: var(--accent); }
+.tb-search input::placeholder { color: var(--muted); }
+.tb-ico { position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  color: var(--muted); font-size: 12px; pointer-events: none; }
+.tb-sort { padding: 7px 10px; border-radius: 8px; background: var(--panel);
+  border: 1px solid var(--border); color: var(--text); font-size: 13px; cursor: pointer; }
+.tb-sort:focus { outline: none; border-color: var(--accent); }
+.tb-dir { padding: 7px 11px; border-radius: 8px; background: var(--panel);
+  border: 1px solid var(--border); color: var(--muted); font-size: 13px; cursor: pointer; }
+.tb-dir:hover { color: var(--text); border-color: #33405a; }
+.tb-count { margin-left: auto; font-size: 12px; color: var(--muted); }
+.tb-empty { padding: 24px; text-align: center; color: var(--muted); font-size: 13px;
+  background: var(--panel-2); border: 1px dashed var(--border); border-radius: 14px; }
+/* ── 可折叠卡片(添加主播):默认收起,点击标题展开 ── */
+.coll-head { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px; }
+.coll-head:hover { color: var(--text); }
+.coll-arrow { font-size: 10px; color: var(--muted); transition: transform .15s; display: inline-block; }
+.collapse.open .coll-arrow { transform: rotate(90deg); }
+.collapse .coll-body { display: none; }
+.collapse.open .coll-body { display: block; padding-top: 14px; }
+
+/* ── 主播二级详情面板 ── */
+.s-detail { flex-basis: 100%; display: none; border-top: 1px dashed var(--border);
+  margin-top: 4px; padding: 12px 14px; }
+.streamer.open .s-detail { display: block; }
+.detail-cols { display: flex; gap: 26px; flex-wrap: wrap; }
+.detail-sec { min-width: 230px; flex: 1; }
+.detail-sec h4 { margin: 0 0 8px; font-size: 12px; color: var(--muted); font-weight: 500; }
+.detail-sec h4 .sub { font-weight: 400; font-size: 11px; }
+.id-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
+.id-row .k { color: var(--muted); width: 56px; flex-shrink: 0; }
+.id-row code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--text);
+  background: var(--panel); padding: 2px 6px; border-radius: 6px; word-break: break-all; }
+.id-row .btn { padding: 3px 10px; font-size: 11px; flex-shrink: 0; }
+.shot-grid { display: flex; gap: 8px; flex-wrap: wrap; }
+.shot { width: 64px; height: 44px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border);
+  cursor: pointer; background: #000; flex-shrink: 0; }
+.shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.shot:hover, .shot.sel { border-color: var(--accent); }
+.s-shots-empty { font-size: 12px; color: var(--muted); }
+
+/* ── 路径操作弹出菜单 ── */
+.path-menu { position: fixed; z-index: 200; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 4px; min-width: 168px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+.path-menu.hidden { display: none; }
+.path-menu button { display: block; width: 100%; text-align: left; background: none; border: 0;
+  color: var(--text); font-size: 13px; padding: 8px 12px; border-radius: 8px; cursor: pointer; }
+.path-menu button:hover { background: var(--panel-2); }
+.path-menu .pm-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px;
+  color: var(--muted); padding: 6px 12px 4px; word-break: break-all; max-width: 320px; }
+.dm-modal { position: fixed; inset: 0; z-index: 300; background: rgba(0,0,0,.55);
+  display: flex; align-items: center; justify-content: center; }
+.dm-modal.hidden { display: none; }
+.dm-panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  width: min(680px, 92vw); max-height: 82vh; display: flex; flex-direction: column; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+.dm-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.dm-head b { font-size: 14px; }
+.dm-sub { color: var(--muted); font-size: 12px; flex: 1; }
+.dm-body { padding: 12px 16px; overflow-y: auto; font-size: 13px; }
+.dm-global { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+.dm-global input { width: 80px; }
+.dm-global .hint { flex: 1; }
+.dm-seg { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.dm-seg:last-child { border-bottom: none; }
+.dm-seg .s-idx { font-family: ui-monospace, Menlo, monospace; color: var(--accent-2); min-width: 42px; }
+.dm-seg .s-file { color: var(--muted); font-size: 12px; flex: 1; word-break: break-all; }
+.dm-seg input { width: 64px; }
+.dm-seg .s-sec { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 110px; }
+.dm-sum { margin-top: 10px; padding: 10px; background: var(--panel-2); border-radius: 8px;
+  color: var(--muted); font-size: 12px; line-height: 1.8; }
+.dm-sum b { color: var(--text); }
+.dm-gaps { color: var(--warn); font-size: 12px; margin-top: 6px; line-height: 1.6; }
+.archive-info { font-size: 13px; color: var(--muted); line-height: 1.7; }
+.archive-info p { margin: 6px 0; }
+.archive-info b { color: var(--text); }
+.archive-info code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+/* 历史行:方案 B —— 单行精简(grid 固定列宽,杜绝错位)+ 详情按需展开 */
+.hist-row { display: block; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.hist-row:last-child { border-bottom: none; }
+.h-main { display: grid;
+  grid-template-columns: minmax(64px, .9fr) minmax(110px, 2fr) 66px 62px auto auto;
+  gap: 10px; align-items: center; }
+.h-main > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.h-name { font-weight: 600; }
+.h-time { color: var(--muted); font-size: 12px; }
+.h-dur { font-variant-numeric: tabular-nums; color: var(--text); font-size: 12px; }
+.h-size { color: var(--muted); font-size: 12px; }
+.h-state { display: flex; align-items: center; gap: 6px; overflow: visible; white-space: nowrap; }
+.h-ops { display: flex; gap: 4px; justify-content: flex-end; overflow: visible; white-space: nowrap; }
+/* 展开区:完整路径 + 随行文件清单 */
+.h-detail { margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--border); }
+.h-detail .drow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.h-detail .dlabel { font-size: 11px; color: var(--muted); flex-shrink: 0; }
+.h-pth { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; min-width: 0; }
+.h-pth:hover { color: var(--text); text-decoration: underline; }
+.h-files { display: flex; gap: 6px 12px; flex-wrap: wrap; margin-top: 8px; }
+.h-files .fi { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; }
+.h-files .fi b { font-weight: 500; font-size: 11px; color: var(--muted); flex-shrink: 0; }
+.h-files .fp { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.h-files .fp:hover { color: var(--text); text-decoration: underline; }
+.h-files .miss { opacity: .45; cursor: not-allowed; }
+.h-files .unknown { opacity: .7; }
+.hist-row .btn { padding: 4px 9px; font-size: 12px; }
+.hist-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+.hist-toolbar select { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px; font-size: 12px; }
+.hist-info { font-variant-numeric: tabular-nums; min-width: 46px; text-align: center; }
+.hist-row .btn { padding: 4px 10px; font-size: 12px; }
+
+.badge { padding: 2px 10px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+.badge.live { background: rgba(52, 211, 153, .15); color: var(--ok); }
+.badge.hot { background: rgba(251, 191, 36, .15); color: var(--warn); }
+.badge.cold { background: rgba(123, 211, 252, .13); color: #7dd3fc; }
+.badge.cooldown { background: rgba(248, 113, 113, .15); color: var(--danger); }
+.badge.wait { background: rgba(139, 148, 167, .14); color: var(--muted); }
+.badge.off { background: rgba(107, 114, 128, .16); color: #9aa3b2; }   /* 未监测:休眠 */
+/* 归档状态徽标(与录制中/已完成严格区分) */
+.badge.archived { background: rgba(167, 139, 250, .16); color: #a78bfa; }   /* 已归档:靛紫(终态) */
+.badge.err { background: rgba(248, 113, 113, .15); color: var(--danger); }  /* 归档失败 */
+.badge.arch { background: rgba(34, 211, 238, .15); color: #22d3ee; }        /* 归档中:青(进行中) */
+.badge.gone { background: rgba(107, 114, 128, .14); color: #6b7280;         /* 文件缺失:暗灰+删除线 */
+  text-decoration: line-through; }
+/* 归档位置标签(单行徽标旁) */
+.h-loc { display: inline-flex; align-items: center; font-size: 11px; padding: 1px 7px; border-radius: 4px;
+  background: rgba(139, 148, 167, .12); color: var(--muted); white-space: nowrap; }
+.h-loc.archive { background: rgba(167, 139, 250, .14); color: #a78bfa; }
+/* 抖音登录卡片(高级参数) */
+.auth-scope { font-size: 11px; font-weight: 400; color: var(--muted); margin-left: 8px; }
+.auth-box { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 4px 0 10px; }
+.auth-box .a-info { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 200px; }
+.auth-box .a-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; background: var(--muted); }
+.auth-box .a-dot.on { background: var(--ok); }
+.auth-box .a-dot.warn { background: var(--warn); }
+.auth-box .a-dot.err { background: var(--danger); }
+.auth-box .a-name { font-size: 13px; font-weight: 500; }
+.auth-box .a-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.auth-box .a-ops { display: flex; gap: 8px; flex-shrink: 0; }
+
+/* Cookie 用量条:账号风控额度是消耗品,界面上必须能看到还剩多少 */
+.auth-box .a-guard { flex-basis: 100%; margin-top: 4px; padding-top: 10px;
+  border-top: 1px solid var(--border); }
+.auth-box .a-guard-row { display: flex; justify-content: space-between;
+  font-size: 11px; color: var(--muted); }
+.auth-box .a-guard-row b { color: var(--text); font-weight: 600; }
+.auth-box .a-bar { height: 4px; border-radius: 2px; background: var(--panel-2);
+  margin: 5px 0 6px; overflow: hidden; }
+.auth-box .a-bar i { display: block; height: 100%; background: var(--accent);
+  border-radius: 2px; transition: width .3s; }
+.auth-box .a-guard-sub { font-size: 10.5px; color: var(--muted); line-height: 1.7; }
+.auth-manual { flex-basis: 100%; margin-top: 8px; padding: 10px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; }
+.auth-manual textarea { width: 100%; min-height: 62px; resize: vertical;
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; padding: 7px; font-size: 11px; font-family: ui-monospace, monospace;
+  line-height: 1.5; box-sizing: border-box; }
+.auth-manual .am-hint { font-size: 10.5px; color: var(--muted);
+  line-height: 1.7; margin-bottom: 6px; }
+.auth-manual .am-ops { display: flex; gap: 8px; margin-top: 7px; }
+.auth-note { margin-top: 2px; line-height: 1.6; }
+.dot-live { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-live.on { background: var(--ok); box-shadow: 0 0 0 3px rgba(52,211,153,.18); }
+.dot-live.off { background: #3a4150; }
+
+.empty { text-align: center; color: var(--muted); padding: 40px 0; font-size: 13px; }
+
+/* ── 预览图弹层 ── */
+.modal { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; }
+.modal.hidden { display: none; }
+.modal-mask { position: absolute; inset: 0; background: rgba(0,0,0,.55); }
+.modal-box { position: relative; width: min(720px, 92vw); max-height: 86vh; overflow: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 20px; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.modal-title { font-size: 15px; font-weight: 500; }
+.pv-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.pv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.pv-item { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--panel-2); }
+.pv-item.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.pv-item img { width: 100%; height: 110px; object-fit: cover; display: block; background: #000; }
+.pv-actions { display: flex; gap: 6px; padding: 8px; }
+.pv-actions .btn { flex: 1; padding: 6px 8px; font-size: 12px; }
+
+/* ── 参数表单 ── */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-size: 12px; color: var(--muted); }
+.field .ctl { display: flex; align-items: center; gap: 8px; }
+.field input, .field select {
+  width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 10px; padding: 9px 12px; font-size: 14px; outline: none; transition: border .15s; }
+.field input:focus, .field select:focus { border-color: var(--accent); }
+.field .unit { color: var(--muted); font-size: 12px; min-width: 26px; }
+.field .hint { font-size: 11px; color: #5b6270; }
+.field.wide { grid-column: 1 / -1; }
+.field.wide textarea { width: 100%; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 13px;
+  font-family: ui-monospace, Menlo, monospace; resize: vertical; min-height: 64px; outline: none; }
+.field.wide textarea:focus { border-color: var(--accent); }
+
+.save-bar { display: flex; align-items: center; gap: 14px; margin-top: 4px; }
+.toast { font-size: 13px; color: var(--ok); opacity: 0; transition: opacity .3s; }
+.toast.show { opacity: 1; }
+.toast.err { color: var(--danger); }
+/* 全局浮动提示:复制等轻量操作的即时反馈(各行内的 .toast 是保存类提示,
+   位置固定在表单旁边,不适合跨视图的短反馈) */
+#gtoast { position: fixed; top: 18px; left: 50%; z-index: 999;
+  padding: 8px 18px; border-radius: 9px; font-size: 13px;
+  background: var(--panel); border: 1px solid var(--ok); color: var(--ok);
+  opacity: 0; pointer-events: none;
+  transform: translateX(-50%) translateY(-10px);
+  transition: opacity .18s, transform .18s; }
+#gtoast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+#gtoast.err { border-color: var(--danger); color: var(--danger); }
+
+@media (max-width: 720px) {
+  .layout { flex-direction: column; }
+  aside { width: 100%; border-right: 0; border-bottom: 1px solid var(--border); }
+  main { padding: 18px; }
+  .add-form { flex-direction: column; }
+}
+</style>
+</head>
+<body data-page-node-id="DuSnznZXalGKCpUuGHsspU">
+<div class="layout" data-page-node-id="RAKoKLppEQ8OqKwd8YrOqI">
+  <aside data-page-node-id="3ccxiALo32daChbEbdVGUf">
+    <div class="brand" data-page-node-id="kmRSUSLt7K4LXfsF3odQIc">
+      <div class="logo" data-page-node-id="EZJjRyKVS40JE3AzpEJItZ">抖</div>
+      <div data-page-node-id="6CVCyFIPaSkOLWSsU5fpI1">直播监控<span class="sub" data-page-node-id="JBOFqkKIvIEpGWiFzZwtuR">控制台</span></div>
+    </div>
+    <nav data-page-node-id="MdbGgNHPKQo3sjWjxF6Nrm">
+      <button class="nav-item active" data-view="streamers" data-page-node-id="tsGMMp4kYhWDZAQ8JkNWzr"><span class="ic" data-page-node-id="LLnrfgsuTxQz06snn5kOKF">▣</span>主播管理</button>
+      <button class="nav-item" data-view="nas" data-page-node-id="GHP94vJSVPivNSbCfPgreF"><span class="ic" data-page-node-id="aRcrgbg0LsFt1Vz3i4LzqU">◈</span>归档设置</button>
+      <button class="nav-item" data-view="history" data-page-node-id="cK9V2ECJzDJifHtnX0FNqM"><span class="ic" data-page-node-id="teMXA5hdPgVFCxnEGuGIbk">▤</span>录制历史</button>
+      <button class="nav-item" data-view="health"><span class="ic">◍</span>系统健康</button>
+      <div class="nav-group" id="group-schedule" data-page-node-id="ERe81OKlvMr4wvaV5tagxn">
+        <button class="nav-item" id="toggle-schedule" data-page-node-id="UCaVCSLIPewevkBUTeWSX7"><span class="ic" data-page-node-id="hSRBSXVniuyvAna0kBo4nE">⚙</span>调度设置<span class="chev" data-page-node-id="8XXiWHx57QKqFRRKa1NbR1">▾</span></button>
+        <div class="nav-sub" data-page-node-id="SvevOrDWpKZicfpwFKJ4ab">
+          <button class="nav-item sub" data-view="params" data-page-node-id="qzFcf6g0gI7yoZOAThwXQf"><span class="dot" data-page-node-id="vCuXhKvCsCQZpBikvRkBAv"></span>常用参数</button>
+          <button class="nav-item sub" data-view="advanced" data-page-node-id="vYcnSyeQSWSkaAGmCDsdkK"><span class="dot" data-page-node-id="JrRQUajwVGecpPyG6t0c7U"></span>高级参数</button>
+          <button class="nav-item sub" data-view="guide"><span class="dot"></span>项目指引</button>
+        </div>
+      </div>
+    </nav>
+    <div class="side-foot" data-page-node-id="DAjlS05Ilfs60HE7amhSGs">
+      <div class="svc-row" data-page-node-id="7XcQATw1d7F0mQHEptOuza">
+        <span class="svc-dot" id="svc-dot" data-page-node-id="I7Ff53mOP4LxyVLdY713HE"></span>
+        <span id="svc-text" data-page-node-id="EmsePu20k8yYxZjEtsLIjK">服务状态加载中…</span>
+      </div>
+      <div class="svc-btns" data-page-node-id="HEdx7ikvhplUuKsMgyHKdW">
+        <button class="btn btn-ghost" id="svc-restart" title="重启本服务(会中断当前录制)" data-page-node-id="HtiWJBCWOM5vbAQ3xskY5M">重启</button>
+        <button class="btn btn-ghost btn-danger" id="svc-stop" title="停止本服务(需手动启动恢复)" data-page-node-id="sPaNL0pG0pBX7iecCr9I1l">关闭</button>
+        <button class="btn btn-ghost hidden" id="svc-start" title="重新启动本服务" data-page-node-id="Vtjtkxs8Hp0BEfXfJF68mY">启动</button>
+      </div>
+      <div class="svc-meta" id="svc-meta" data-page-node-id="Sl2457cCkscWkpaxY5C12L">参数保存后即时生效<br data-page-node-id="gB8tLHMIX5qJj9EjJUw43i">状态每 3 秒刷新</div>
+    </div>
+  </aside>
+
+  <main data-page-node-id="LvUHNXtxk6OJ5mh4cBZKta">
+    <!-- 启动自检横幅 -->
+    <div id="setup-banner" class="card hidden" data-page-node-id="6OhYkoqKzk7CYzuzczcrbL"></div>
+    <!-- 主播管理 -->
+    <section class="view active" id="view-streamers" data-page-node-id="uIFg60Af9vNpf4Jhf5XIcL">
+      <div class="view-head" data-page-node-id="nl5MCuMGFqRUW5N1u5qQKD"><h1 data-page-node-id="HPiSOhzBErhduigALPSrfy">主播管理</h1><span class="desc" data-page-node-id="Rk6p6s8fsyn5pbN9LGDiA1">添加要跟踪的主播,自动监测开播状态</span></div>
+      <div class="card collapse" id="add-card" data-page-node-id="OfSxP6TT6KM42h18vifHAR">
+        <div class="card-title coll-head" id="add-toggle" data-page-node-id="8NNbVh2mVatUbhJGRQcJId"><span class="coll-arrow">▶</span>添加主播</div>
+        <div class="coll-body">
+        <div class="add-form" data-page-node-id="uvj3LAn8N5nReksByjDvvP">
+          <input id="add-link" placeholder="粘贴抖音分享链接,自动解析 ID(可选)" aria-label="分享链接" data-page-node-id="ROWUHch4kTRw4mY4xTjz1B">
+          <button class="btn btn-ghost" id="parse-link" style="white-space:nowrap" data-page-node-id="NrbEWonCkRdJLchtZmioBu">解析</button>
+        </div>
+        <div class="add-form" data-page-node-id="oHCSonxF8ZGaT8qgW5nhLI">
+          <input id="add-name" placeholder="主播名称" aria-label="主播名称" data-page-node-id="wpxU470PxmuojobLlSB61G">
+          <input id="add-anchor" placeholder="sec_uid(如 MS4wLjAB…)" aria-label="主播sec_uid" data-page-node-id="sCJMyXimLYCeFc85jZquOZ">
+          <input id="add-webrid" placeholder="直播间号 web_rid(纯数字,用于开播检测)" aria-label="直播间号" data-page-node-id="elTKo3vFCYjXgVvKMSXrOp">
+          <input id="add-douyinid" placeholder="抖音号(可选)" aria-label="抖音号" data-page-node-id="wQluvAQI4LiXsZBA2l23iz">
+          <button class="btn btn-primary" id="add-btn" data-page-node-id="hTRx1367swuP3FlCnAACWi">添加</button>
+        </div>
+        <div class="hint" data-page-node-id="0yIyisk8gd9gwIt78iCcDV">提示:可粘贴分享链接点「解析」自动填入 ID;开播检测必须用直播间号(web_rid)。</div>
+        </div>
+      </div>
+      <div class="str-toolbar">
+        <div class="tb-search">
+          <svg class="tb-ico" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="4.5"></circle><line x1="10.4" y1="10.4" x2="14" y2="14"></line></svg>
+          <input id="str-search" placeholder="搜索姓名或抖音号" autocomplete="off" aria-label="搜索主播">
+        </div>
+        <select class="tb-sort" id="str-sort" aria-label="排序方式">
+          <option value="recent">排序:最近开播</option>
+          <option value="live">排序:正在开播</option>
+          <option value="added">排序:添加时间</option>
+        </select>
+        <button class="tb-dir" id="str-dir" title="切换升序 / 降序">↓</button>
+        <span class="tb-count" id="str-count">共 0 位</span>
+      </div>
+      <div id="streamer-list" data-page-node-id="tG4ntlgl5yrMxWSCKde1El"></div>
+    </section>
+
+    <!-- 常用参数 -->
+    <section class="view" id="view-params" data-page-node-id="5JxbBfTMxx7GSq5FRUxgZD">
+      <div class="view-head" data-page-node-id="foRiSQgmdWU7Vr7WAU50yt"><h1 data-page-node-id="W69UpoSaYDC4mUeuV4akF8">常用参数</h1><span class="desc" data-page-node-id="Cr2Mci2seTVyUZ4H1QaIVA">日常最常调整的调度项</span></div>
+      <div class="card" data-page-node-id="NEY4uOCszu1RKNQOcWHLJH">
+        <div class="grid" id="grid-common" data-page-node-id="x5DRx6OO4jPWAGraEGQ69N"></div>
+        <div class="save-bar" style="margin-top:20px" data-page-node-id="F7Eu02M87HKLVFaDZSVmmX">
+          <button class="btn btn-primary" id="save-common" data-page-node-id="4jirrgcJRrDuHGKlTjTiL1">保存并应用</button>
+          <span class="toast" id="toast-common" data-page-node-id="6vFFY67yt5kMDqRJyFrovx"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 高级参数 -->
+    <section class="view" id="view-advanced" data-page-node-id="4LAS6xRvY3QvmlrMh1dquT">
+      <div class="view-head" data-page-node-id="lRJr8AfKFyDg7EI7ceABq1"><h1 data-page-node-id="HmMl0bTjBbSmh6SVtqJeEj">高级参数</h1><span class="desc" data-page-node-id="WKFtUwA9PODzBhbAnH5vHZ">不常调整,默认值通常无需改动</span></div>
+      <div class="card" data-page-node-id="dlY5u7ARNv2y0wkC4LiTpm">
+        <div class="card-title" data-page-node-id="qRxfNAHC0pAHVy1970Pv7o">抖音登录 <span class="auth-scope" data-page-node-id="c23bQBw6EuM3hW1xW6hAjt">仅用于开播检测</span></div>
+        <div class="auth-box" id="auth-box" data-page-node-id="6hpfIxC6rw41NeOnzeVAnt"><div class="hint" data-page-node-id="MGMf70r3F2mkk0vuIz7naY">加载中…</div></div>
+        <div class="hint auth-note" data-page-node-id="Pd9MAgp8joWBHb5HGAoxmz">Cookie 存于系统钥匙串,不写入配置文件;
+          <b data-page-node-id="VawcB79gSyCvqSgz1ksvAX">不会</b>用于弹幕采集 —— 抖音限制同一账号同时只能进入一个直播间,
+          带登录态会挤占多路并发录制,弹幕连接因此始终保持匿名。</div>
+      </div>
+      <div class="card" data-page-node-id="upjS2y4OYygsCGujh0kbER">
+        <div class="card-title" data-page-node-id="qcrrdIXRMkJtPSVNNZR4D4">监控与开播检测</div>
+        <div class="grid" id="grid-advanced" data-page-node-id="It0ff1P9aWs4BE6kAoXpR7"></div>
+      </div>
+      <div class="card" data-page-node-id="FdnP61hkX36Hm7dskU1Bsw">
+        <div class="card-title" data-page-node-id="t4CPg5W35wu4cwvl9VqaJz">录制设置</div>
+        <div class="grid" id="grid-recorder" data-page-node-id="8L9SSeiWTETZXsdzhcx3jP"></div>
+        <div class="hint" id="recorder-current" style="margin-top:12px" data-page-node-id="etCyBNYjkkfF6zocYrokwH"></div>
+        <div class="save-bar" style="margin-top:16px" data-page-node-id="RLGcbQ4140seV0m1ofxGMJ">
+          <button class="btn btn-primary" id="save-advanced" data-page-node-id="wZqrkJOLcaRoq0rJXZ1i4h">保存并应用</button>
+          <span class="toast" id="toast-advanced" data-page-node-id="XsROC7vctFpIZQAYvWDn66"></span>
+        </div>
+      </div>
+      <div class="card" data-page-node-id="yElQdBsrLPCdGIZzDQHjin">
+        <div class="card-title" data-page-node-id="HtrtxP4WQPIXMYtUPtIrnm">预览图设置</div>
+        <div class="grid" id="grid-preview" data-page-node-id="EOJ0eUBByE5BOBmsIhmCAg"></div>
+        <div class="hint" style="margin-top:12px" data-page-node-id="bJuopBlFT3YbYlR6tU1W8O">预览图用于主播卡片头像;开播后未设置预览图时自动截图备选,也可在主播卡片点「预览图」上传/选择。</div>
+        <div class="save-bar" style="margin-top:16px" data-page-node-id="OIGo8lDhTF0wIdH35DzFRW">
+          <button class="btn btn-primary" id="save-preview" data-page-node-id="h1C07LtWW1p3fhcV0FhK8d">保存并应用</button>
+          <span class="toast" id="toast-preview" data-page-node-id="vnVq5hVT4te5SIvpwwxHPf"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 项目指引 -->
+    <section class="view" id="view-guide">
+      <div class="view-head"><h1>项目指引</h1><span class="desc">常用目录一键跳转,按钮在服务器本机打开 Finder 窗口</span></div>
+      <div class="card">
+        <div class="card-title">目录跳转</div>
+        <div id="guide-groups"></div>
+        <div class="hint" style="margin-top:14px">
+          路径由后端按项目实际位置解析,整个项目搬到别的目录或别的电脑后,这里显示与跳转都会自动跟着变。
+          要增删目录项,改 <code>webui.py</code> 里的 <code>GUIDE_FOLDERS</code> 一处即可,前端无需改动。
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">孤儿目录清理</div>
+        <div class="hint">
+          主播卡片删除后,其 <code>previews/</code> 与 <code>recordings/</code> 目录不会立刻消失,
+          而是先登记进台账(<code>spool/retention.json</code>),满 <b id="rt-grace">30</b> 天才真正清理;
+          期间把主播加回来会自动取消。<b>NAS 上已归档的副本不受影响</b>,清理只作用于项目内目录,
+          且 <code>recordings/</code> 下要求该主播的历史条目全部已归档才会删。
+        </div>
+        <div id="rt-list" class="rt-list"></div>
+        <div class="row" style="margin-top:12px;gap:8px">
+          <button class="btn" id="rt-sweep-dry">试算(dry-run)</button>
+          <button class="btn primary" id="rt-sweep-apply">立即清理到期项</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">项目结构速查</div>
+        <div class="guide-tree">
+          <div><b>项目根目录</b> — 源码 .py / static / tests / scripts / config.json</div>
+          <div><b>logs/</b> — 主业务日志(按天)与 launchd 输出</div>
+          <div><b>previews/</b> — 主播头像截图,按主播分目录</div>
+          <div><b>recordings/</b> — 录制暂存(flv + ass),归档后移走</div>
+          <div><b>spool/</b>、<b>auth/</b> — 归档队列、登录状态</div>
+          <div><b>~/DouyinArchive/直播回放</b> — NAS 归档总库(项目外)</div>
+        </div>
+        <div class="hint" style="margin-top:12px">完整的可清理清单与迁移方案见项目根目录的
+          <code>项目整理与迁移方案.md</code>。</div>
+      </div>
+    </section>
+
+    <!-- 系统健康 -->
+    <section class="view" id="view-health">
+      <div class="view-head">
+        <h1>系统健康</h1>
+        <span class="desc">各组件最后心跳与实时状态,15 秒自动刷新</span>
+      </div>
+      <div class="card">
+        <div class="card-title" style="display:flex;align-items:center;gap:10px">
+          <span>总览</span>
+          <span id="h-summary" class="h-sum">加载中…</span>
+          <span style="margin-left:auto;display:flex;gap:8px">
+            <button class="btn" id="h-refresh">立即刷新</button>
+          </span>
+        </div>
+        <div class="hint">
+          判定依据是<b>最后一次成功执行距今多久</b>,而不只是「进程在不在」。
+          服务活着但业务停了(例如继承了失效的环境代理)时,进程灯全绿,
+          只有常驻任务的心跳会持续变老 —— 那是唯一能暴露这类静默故障的信号。
+        </div>
+      </div>
+      <div id="h-groups"></div>
+      <div class="card">
+        <div class="card-title">状态含义</div>
+        <div class="guide-tree">
+          <div><span class="h-dot ok"></span><b>正常</b> — 心跳在预期周期内</div>
+          <div><span class="h-dot warn"></span><b>降级</b> — 心跳延迟,或本轮有异常(仍在运行,但值得看一眼)</div>
+          <div><span class="h-dot down"></span><b>故障</b> — 心跳超时未更新,基本可判定卡死</div>
+          <div><span class="h-dot idle"></span><b>空闲</b> — 未启用或暂无任务(如没人开播时录制进程为空闲)</div>
+        </div>
+        <div class="hint" style="margin-top:12px">
+          常驻任务的宽限期按最坏情况设定(轮询周期 + 抖动 + 退避上限),
+          宁可迟报也不误报。6 小时 / 12 小时周期的任务在刚启动的一段时间里显示为空闲,属正常。
+        </div>
+      </div>
+      <div class="card" id="h-shortcuts">
+        <div class="card-title" style="display:flex;align-items:center;gap:10px">
+          <span>终端快捷指令</span>
+          <span id="sc-sum" class="h-sum">加载中…</span>
+        </div>
+        <div class="hint">
+          下面这些在<b>任意终端目录</b>都能敲,效果与页面上的按钮一致(启停规则共用同一份,
+          不会一边改了另一边没改)。点命令格即可复制。
+        </div>
+        <div id="sc-body"></div>
+      </div>
+    </section>
+
+    <!-- NAS 归档 -->
+    <section class="view" id="view-nas" data-page-node-id="FT0NMN0HANnMDFWeb3isj6">
+      <div class="view-head" data-page-node-id="l0xHSO9zCKY6upqlcXWonS"><h1 data-page-node-id="Ab1GUWwMDXtJJYLBHERY13">归档设置</h1><span class="desc" data-page-node-id="PVBhSqbHgKOYPUHVYFf7pl">配置归档目标:NAS 网络盘或外接硬盘,下播后自动归档录制素材</span></div>
+      <div class="card" data-page-node-id="9vTrcGEtxxeFe5hHlhWXm5">
+        <div class="card-title" data-page-node-id="5ShwbfAFKtHeIKKHRCyoDX">归档目标</div>
+        <div class="grid" data-page-node-id="vOKuBG6cQ9ce4AFpXvFb3W">
+          <div class="field" data-page-node-id="TySPwsAcBVtaH40jhD2neB"><label data-page-node-id="CTDksVpNRYiotoQfVWHUj8">归档模式</label><div class="ctl" data-page-node-id="mNw1aQl3V2mFG8mAiDVBRE">
+            <select id="archive-mode" data-page-node-id="ffpLftlHQw9E6kIP9vAWv9">
+              <option value="auto" data-page-node-id="X7kMXrEhBC8pQH13J5Bgd1">自动(NAS 优先,失败用外接硬盘)</option>
+              <option value="nas" data-page-node-id="h4XQ4IinwjScEJwijE5YV3">仅 NAS</option>
+              <option value="external" data-page-node-id="UEBWSUbSgVJwDQ4L0F0gfm">仅外接硬盘</option>
+            </select></div></div>
+          <div class="field" data-page-node-id="DpvASM0cabp3UOfb3uEsqR"><label data-page-node-id="J1qcbYYVxK35PeW9hbXUNd">外接硬盘目录</label><div class="ctl" data-page-node-id="d9MssI3iZ6CRrHWAnKDH3J">
+            <input id="archive-ext" placeholder="如 /Volumes/Backup/直播归档" data-page-node-id="LmG16bNgWjVgvVqAkfnOwO"></div></div>
+        </div>
+      </div>
+      <div class="card" data-page-node-id="yknZON6qgKwuPojX0fcVuE">
+        <div class="card-title" data-page-node-id="uVGnyedCFrewQSHGxMCOxx">NAS 连接信息</div>
+        <div class="grid" data-page-node-id="Ba1uNp6Quy8keFjjnuQOZE">
+          <div class="field" data-page-node-id="scQfUblIegbC7YfcnXiw7x"><label data-page-node-id="9208iDSg6QDB0zmk3orlSM">协议</label><div class="ctl" data-page-node-id="xLSsbi45hMcGjww3MA6TG3">
+            <select id="nas-protocol" data-page-node-id="gVVaxieonx8O0kC8FERcW5"><option value="smb" data-page-node-id="a25sYi3vhszmANR7B5mCX4">smb</option></select></div></div>
+          <div class="field" data-page-node-id="i5GQsGhowbVNi2y3NKTV9A"><label data-page-node-id="YCBLO9Cn4CiyFSKi4yX7gD">主机(IP/域名)</label><div class="ctl" data-page-node-id="SuXvtpJP8QHXD7SGovRWpV">
+            <input id="nas-host" placeholder="192.168.1.10（可整串粘贴 smb://...）" data-page-node-id="sbYs7YtXBKLkBGHdUbS2vj"></div></div>
+          <div class="field" data-page-node-id="AVx28tvNlgw2h5xoYwlft4"><label data-page-node-id="LN8ZXhObrTbClF3R5BZ2Pj">端口</label><div class="ctl" data-page-node-id="va75u0ZKepDuFAxZhq85jY">
+            <input id="nas-port" type="number" value="445" data-page-node-id="VJpAJFRuaBkDG63G0TNfw7"></div></div>
+          <div class="field" data-page-node-id="IfbEjZ154yYMYtVTikPaUE"><label data-page-node-id="k0UHJHLxv7MJqpLgHBMIWs">共享名</label><div class="ctl" data-page-node-id="HMBDYkY7kbxiKy1Ge86LxR">
+            <select id="nas-share" data-page-node-id="g7JTr7vBmhPc8NPeDG188a"><option value="" data-page-node-id="gYoPdFo5AH890wQwrEZNuG">先填主机/用户名/密码,再点「检测共享」</option></select>
+            <button class="btn btn-ghost" id="nas-detect" style="padding:8px 12px;white-space:nowrap" data-page-node-id="cwMmOFeiusNP2KyMalHxMG">检测共享</button></div></div>
+          <div class="field" data-page-node-id="DoOW9mn2x9iYHiaVIzG0Up"><label data-page-node-id="GY7rmiUKZsipsNDMoBvoPW">用户名</label><div class="ctl" data-page-node-id="aIuEx7KP1guNjzMn2XiOFx">
+            <input id="nas-username" placeholder="可选" data-page-node-id="BADYRDF1aABp26c985K7f1"></div></div>
+          <div class="field" data-page-node-id="IE0FxJmXX5r56TMvFYJUwu"><label data-page-node-id="1q3ztKHq1RccrGfckhbw64">密码</label><div class="ctl" data-page-node-id="kyu6e73CqE71XFpUuZZdLK">
+            <input id="nas-password" type="password" placeholder="留空则使用已存凭据" data-page-node-id="jnBHsde2c6cVIJODyFDCTd"></div></div>
+          <div class="field" data-page-node-id="Idze27YUQiAEbemiKdzBwC"><label data-page-node-id="PGNd8fEaXWEnjDf6wRTC5p">挂载点</label><div class="ctl" data-page-node-id="g6eilrNR0qYSgEU7a7RPjp">
+            <input id="nas-mount" value="/Volumes/douyin-archive" data-page-node-id="4EyZeoxxS9SH5HS5V0UzeD"></div></div>
+          <div class="field" data-page-node-id="Wjnj9RP9bLCfQoSsYCPtu2"><label data-page-node-id="uAaTApgwexWd4dkEzRE0Cq">归档根目录</label><div class="ctl" data-page-node-id="Y9xHCYRiLYg6kZAKBffhqm">
+            <input id="nas-root" value="录播" data-page-node-id="SAtOT1XdDF9wpnfEexIvOF"></div></div>
+        </div>
+        <div class="save-bar" style="margin-top:20px" data-page-node-id="jScoLhxPJUexv3qGvzfUdD">
+          <button class="btn btn-ghost" id="nas-test" data-page-node-id="En8318TqKva52HchZ35Vp7">测试连接</button>
+          <button class="btn btn-primary" id="nas-save" data-page-node-id="G4jyOCO5tpKRtqYBuAodJD">保存并启用</button>
+          <span class="toast" id="toast-nas" data-page-node-id="f8Cwk6OPsWeSRDIAaI6TCv"></span>
+        </div>
+      </div>
+      <div class="card" data-page-node-id="KoxELA9GdCuYMXXBBVafqq">
+        <div class="card-title" data-page-node-id="sVp2ehCerBcB0LOxAiks4N">状态</div>
+        <div id="nas-status" class="s-meta" style="gap:24px;font-size:13px" data-page-node-id="vjmcifNOyG4HW5ChwDDlo9">
+          <span data-page-node-id="EOB1X6N3OHao33oPN5S4Jg">挂载状态 <b id="nas-mounted" data-page-node-id="1t4kDD0HMH0UK44W7qWJo6">—</b></span>
+          <span data-page-node-id="SKT6kAV62WsBpEqbSG8BE3">队列深度 <b id="nas-depth" data-page-node-id="vrGsHk3Twv62hx2Ay6AVqF">—</b></span>
+          <span data-page-node-id="YP8xA9BgkbQqSLEEbYeAFu">失败条目 <b id="nas-failed" data-page-node-id="6fDmBIUkhochlykRBOjnWF">—</b></span>
+          <span data-page-node-id="kK92AmrxHilVbhRa9illrR">最近归档 <b id="nas-last" data-page-node-id="3Gs5PnnEzYqN0r7brHv2lq">—</b></span>
+        </div>
+      </div>
+      <div class="card" data-page-node-id="H2CGlsLh9370eor7Or6qgf">
+        <div class="card-title" data-page-node-id="LFMWKgi9HDEApipIrlN0yl">归档说明</div>
+        <div class="archive-info" data-page-node-id="4FQ6N03AVJANleDPPyh9Cy">
+          <p data-page-node-id="hceTt3ZHALCxjBc23po2Ry"><b data-page-node-id="T3xVR2DLTBmhLw1nVabTW8">归档方式</b>：主播下播后，录制文件自动从本机 <code data-page-node-id="NBxoX1GKA1byalvuxXBoSc">recordings/</code> 搬运到归档目标（NAS 或外接硬盘）的「<b data-page-node-id="aQDJyShU9oMGrE8mhv0HfQ">直播回放/主播名</b>」目录下。</p>
+          <p data-page-node-id="2jD97aJ8UODL7VsfCRRqfJ"><b data-page-node-id="5xH2CqWhqcn1o3G4Lu6HsD">归档目标</b>：自动模式优先 NAS，挂载失败自动降级外接硬盘；也可强制只用其一。</p>
+          <p data-page-node-id="SwJTJMXPPg2xPLks7PC2Tw"><b data-page-node-id="18E0YFS0KKryOjn3FdPDMq">归档时机</b>：检测到主播下播即触发搬运；若目标不可用，则进入待归档队列，目标恢复后自动补传（外接硬盘拔出后插回同样自动续传）。</p>
+          <p data-page-node-id="Ey9j5EzS20wsdDIqGFGPbT"><b data-page-node-id="kQuNOD9snY1vLh9UrLSBkM">重试策略</b>：每条最多重试 5 次，仍失败则标记为「失败」（可在上方状态卡查看失败条目数）。</p>
+          <p data-page-node-id="8iXbCTN81wDz7C730vF4S0"><b data-page-node-id="NQbnSFrTkCsvIGlEDW9jpH">命名规则</b>：<code data-page-node-id="A1hvJAvNFXu9NoiXFSlshg">主播名-日期时间.格式</code>（如 <code data-page-node-id="3SLs0lD8cTBeo33ql1ehH7">主播A-20260818-163220.flv</code>），开启分片录制时自动追加序号（<code data-page-node-id="HuwqLAi2K7ct8xxx7BQhHA">-000</code>、<code data-page-node-id="m9knAi3qyeBA1aOuzVGeSg">-001</code>…）。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 录制历史 -->
+    <section class="view" id="view-history" data-page-node-id="1uJvawZSHFoMtLEO5pNOl2">
+      <div class="view-head" data-page-node-id="0ObkHvAahmzCPHLOGoo2EP"><h1 data-page-node-id="gAUtmmDEUxzUosCuMCDZyh">录制历史</h1><span class="desc" data-page-node-id="n5xclxsIX0qDR505Jj7IAz">每次开播自动录制的记录</span></div>
+      <div class="card" data-page-node-id="a5WXPpbm5EIT0EDwYsbRMt">
+        <div class="card-title" data-page-node-id="uwPghI8Uyxb73YP0wKj1i7">历史记录</div>
+        <div class="hist-toolbar" data-page-node-id="Vqr6yX1lPBQDZbjdVTKKXh">
+          <span data-page-node-id="kvgiTCgFwzuKXdgSmqEsdj">每页
+            <select id="hist-size" data-page-node-id="mAl1ps3mxQGcGWVF2lfwTo">
+              <option value="20" data-page-node-id="bPPdWasV5O0np9VHSmwH7V">20</option><option value="40" data-page-node-id="SP3uxQJEGUusdK6djhjzsh">40</option><option value="60" data-page-node-id="s0wGBBVW0DZSupdHOxVi1j">60</option>
+            </select> 条</span>
+          <button class="btn btn-ghost" id="hist-prev" data-page-node-id="mevzGlAeoIe28FKPT6omzC">← 上一页</button>
+          <span id="hist-info" class="hist-info" data-page-node-id="xvRnJsY82d7N95YdPMckfC">0/0</span>
+          <button class="btn btn-ghost" id="hist-next" data-page-node-id="yRmRaEwY8QpBmV73kFyKcJ">下一页 →</button>
+          <span style="flex:1" data-page-node-id="NDIGripsSaAAI1QnfrgS95"></span>
+          <button class="btn btn-ghost" id="hist-del-page" data-page-node-id="HdFRdl3DgSJyXLBOSK7qAF">删除本页</button>
+          <button class="btn btn-ghost" id="hist-clear" data-page-node-id="zcQC2M5pbJt2GTilYAEbHd">清空全部</button>
+        </div>
+        <div id="history-list" data-page-node-id="YuMrLoBwLqX6lBeefwObs9"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- 预览图管理弹层 -->
+<div id="preview-modal" class="modal hidden" data-page-node-id="p6URKOArBGNggAzA3hNRKH">
+  <div class="modal-mask" data-page-node-id="QvDCT2fIMLQbIRR1B0BJ0G"></div>
+  <div class="modal-box" data-page-node-id="ToWWmcKJCffdsrqUEjh3p3">
+    <div class="modal-head" data-page-node-id="KuKN6CZPha0PxEpXRVfIhw">
+      <span class="modal-title" id="pv-title" data-page-node-id="RG215vrcv8xCFu3fz2fsZ5">预览图</span>
+      <button class="btn btn-ghost" id="pv-close" data-page-node-id="3QVD4el7eHxCrZuTm8Ki3k">关闭</button>
+    </div>
+    <div class="modal-body" data-page-node-id="yg5lPv2gJ4kwK0yGgisVVc">
+      <div class="pv-toolbar" data-page-node-id="10UXZyATdzSxuQgAV5dVns">
+        <label class="btn btn-primary" style="cursor:pointer" data-page-node-id="Q3FyYqNaqupptYBEJ3XI8Z">上传图片
+          <input type="file" id="pv-file" accept="image/jpeg,image/png,image/webp" style="display:none" data-page-node-id="qKCbOV0gRDGRWmd1I2qKdz">
+        </label>
+        <span class="hint" id="pv-hint" data-page-node-id="LsutORECwNfHQfhji6XEjW"></span>
+      </div>
+      <div id="pv-grid" class="pv-grid" data-page-node-id="pBAbHcwEHTIfvs07t0mHD5"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 备注悬浮窗(主播卡「备注」按钮):不在卡面铺开文字,长句也不会顶乱排版 -->
+<div id="note-modal" class="modal hidden">
+  <div class="modal-mask"></div>
+  <div class="modal-box note-box">
+    <div class="modal-head">
+      <span class="modal-title" id="note-title">备注</span>
+      <button class="btn btn-ghost" id="note-close" title="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <textarea id="note-text" maxlength="200" rows="5"
+        placeholder="写点什么:比如只在周末录、重点看某几场…"></textarea>
+      <div class="note-foot">
+        <span class="hint" id="note-hint">主播多了以后,备注比翻聊天记录快</span>
+        <span class="note-count" id="note-count">0/200</span>
+        <button class="btn btn-ghost" id="note-clear">清空</button>
+        <button class="btn btn-primary" id="note-save">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 路径操作弹层(历史地址/录制文件夹点击) -->
+<div id="path-menu" class="path-menu hidden" data-page-node-id="MUkv7psjBpzB9Sb6SKjOvk"></div>
+
+<!-- 弹幕字幕微调弹层(历史页「弹幕」按钮) -->
+<div id="dm-modal" class="dm-modal hidden" data-page-node-id="ex2CpcdxNDxUcN0IKGtR0Z">
+  <div class="dm-panel" data-page-node-id="GiWjB7fsDWVIzp6zxRCRul">
+    <div class="dm-head" data-page-node-id="wBCK0035X8rJahXEK9VEI9">
+      <b data-page-node-id="XBDgFIFS9p86n0UiT3ElMH">弹幕字幕微调</b>
+      <span id="dm-sub" class="dm-sub" data-page-node-id="gdBbmVzvbQDAdY1fygptb5"></span>
+      <button id="dm-close" class="btn btn-ghost" title="关闭" data-page-node-id="BaY92fqnXTv92JGuLkUCOb">✕</button>
+    </div>
+    <div id="dm-body" class="dm-body" data-page-node-id="vRaK8zdAmjrNAaKDMq2Nhn"><div class="empty" data-page-node-id="AYcMvD2lGk3u8XWIxn4Blw">加载中…</div></div>
+  </div>
+</div>
+
+<script>
+const COMMON_FIELDS = [
+  ["detection.mode", "检测方式", "select", ["302", "api", "mix"], null, "302 轻量 / API 确认 / 混合"],
+  ["schedule.cold_interval", "冷门轮询", "number", "秒", "未知时间表时段(默认 1800)"],
+  ["schedule.hot_min", "热点下限", "number", "秒", "热点窗口内轮询下限"],
+  ["schedule.hot_max", "热点上限", "number", "秒", "热点窗口内轮询上限"],
+  ["schedule.live_interval", "录制中轮询", "number", "秒", "仅冗余兜底(默认 1200)"],
+  ["schedule.hotspot_half_width", "热点窗口半宽", "number", "秒", "开播时间前后范围(默认 1800)"],
+  ["schedule.hotspot_max", "每主播热点上限", "number", "个", "最多保留的热点窗口数"],
+];
+const ADVANCED_FIELDS = [
+  ["detection.cookie", "Cookie(API 通道)", "text", null, "API 确认通道需填,留空自动回退 302"],
+  ["danmaku.enabled", "弹幕/礼物录制", "bool", null, "开播时同步抓取弹幕与礼物(匿名连接,失败不影响录制),生成同名 .ass 字幕随分片自动加载"],
+  ["danmaku.style", "字幕样式", "select", ["queue", "scroll"], "queue=屏幕下方最多 5 行队列,新发言从最下方挤入、旧字幕逐行上移;scroll=传统从右向左横向滚动"],
+  ["danmaku.queue_lines", "队列显示行数", "number", "行", "queue 样式下屏幕底部最多同时显示的行数(默认 5,最大 8)"],
+  ["danmaku.queue_seconds", "单条停留时长", "number", "秒", "queue 样式下每条弹幕最长显示秒数,超时自动消失(默认 8)"],
+  ["danmaku.offset_seconds", "弹幕全局偏移", "number", "秒", "字幕相对视频的整体偏移(正值延后);单场微调请用历史页「弹幕」面板(默认 0)"],
+  ["danmaku.font_size", "弹幕字号", "number", "px", "弹幕字幕字号(默认 44)"],
+  ["danmaku.capture_member", "记录进场消息", "bool", null, "进场消息仅入 jsonl 明细(供 AI 分析),不进字幕;量大默认关"],
+  ["schedule.hotspot_merge_hours", "热点合并阈值", "number", "小时", "实时层:开播相差小于此值并入同窗口,合并取较早(默认 5)"],
+  ["schedule.deviation_trigger_minutes", "偏移触发分析", "number", "分钟", "开播时间偏离现热点中心超过此值,立即重新分析(默认 60)"],
+  ["schedule.analysis_hour", "每日分析时刻", "number", "点", "每天几点全量重算热点(默认 5)"],
+  ["schedule.analysis_min_events", "分析最少事件", "number", "个", "7 天内开播事件不足此数不重算热点(默认 5)"],
+  ["schedule.analysis_cluster_min", "聚类邻距", "number", "分钟", "开播事件相差小于此值归入同簇(默认 90)"],
+  ["schedule.event_retention_days", "事件保留", "number", "天", "原始开播事件日志保留时长(默认 7)"],
+  ["schedule.recency_weight", "近期权重", "number", "倍", "近 3 天事件在聚类中的权重倍数(默认 2)"],
+  ["schedule.max_witness_gap", "见证区间上限", "number", "秒", "两次检测间隔超过此值,估计开播时间不可靠则不记录(默认 7200)"],
+  ["schedule.hotspot_decay_days", "热点衰减", "number", "天", "N 天未命中即淘汰"],
+  ["schedule.circuit_errors", "熔断错误阈值", "number", "次", "连续异常次数触发熔断"],
+  ["schedule.circuit_cooldown", "熔断冷却", "number", "秒", "熔断后的退避时长"],
+  ["recorder.stall_seconds", "数据流停滞阈值", "number", "秒", "ffmpeg 存活但文件持续 N 秒无增长即重启(防「假在线」录不到内容);过半阈值先在主播页告警(默认 90)"],
+  ["recorder.stall_max_restarts", "停滞重启上限", "number", "次", "单场因停滞重启达此次数仍无数据则停止本场录制,避免空转刷历史(默认 4)"],
+  ["recorder.stall_cooldown", "救不回冷却期", "number", "秒", "本场被判定救不回来(ffmpeg 反复退出或重启达上限)后,冷却期内不再重开,避免每轮巡检刷一条空历史(默认 600)"],
+];
+const RECORDER_FIELDS = [
+  ["recorder.bitrate", "录制码率", "text", null, "数字(Kbps)或 3000k/3M;留空/0=复制原流不重编码(最省CPU)"],
+  ["recorder.segment_time", "录制分片时长", "number", "秒", "每段录制时长,0=单文件不切分"],
+  ["recorder.format", "录制格式", "text", null, "flv(推荐,边录边看) / mp4 / ts"],
+];
+const PREVIEW_FIELDS = [
+  ["preview.dir", "预览图目录", "text", null, "截图/上传预览图存放目录(空=项目内 previews/)"],
+  ["preview.start_delay", "截图开始延迟", "number", "秒", "开播后多久截第一张(默认 60)"],
+  ["preview.interval", "截图间隔", "number", "秒", "每张间隔(默认 30)"],
+  ["preview.shots", "截图张数", "number", "张", "每次开播最多截几张(默认 5)"],
+];
+const ADVANCED_TEXT = [
+  ["on_live_command", "开播命令", "支持占位符 {name} {anchor} {room_id} {sec_uid} {room_url} {stream_url}"],
+  ["on_offline_command", "下播命令", "支持占位符 {name} {anchor}"],
+];
+
+let config = {};
+let liveMap = {};   // name -> 状态快照
+let recMap = {};    // name -> 录制状态
+
+function pathGet(o, p) { return p.split(".").reduce((a, k) => a?.[k], o); }
+function pathSet(o, p, v) {
+  const ks = String(p || "").split(".").filter(Boolean);
+  if (!ks.length) return;
+  let t = o;
+  for (let i = 0; i < ks.length - 1; i++) {
+    if (typeof t[ks[i]] !== "object" || t[ks[i]] === null) t[ks[i]] = {};
+    t = t[ks[i]];
+  }
+  t[ks[ks.length - 1]] = v;
+}
+
+/* ── 视图切换 ── */
+function showView(name) {
+  document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+  document.getElementById("view-" + name).classList.add("active");
+  document.querySelectorAll(".nav-item[data-view]").forEach(n =>
+    n.classList.toggle("active", n.dataset.view === name));
+  document.getElementById("group-schedule").classList.add("open");
+  if (name === "guide") { loadGuideFolders(); loadRetention(); }
+  // 健康面板:进入时立即加载并起 15s 轮询;离开时停掉,避免后台空转请求
+  clearInterval(healthTimer);
+  if (name === "health") {
+    loadHealth();
+    loadShortcuts();          // 静态清单,只拉一次(不跟着 15s 轮询空转)
+    healthTimer = setInterval(loadHealth, 15000);
+  }
+}
+document.querySelectorAll(".nav-item[data-view]").forEach(n =>
+  n.addEventListener("click", () => showView(n.dataset.view)));
+document.getElementById("toggle-schedule").addEventListener("click", () =>
+  document.getElementById("group-schedule").classList.toggle("open"));
+
+/* ── 项目指引:目录跳转 ──
+   清单由后端 GUIDE_FOLDERS 提供,前端只负责渲染 —— 增删目录项不用动这里。 */
+const GUIDE_IC = { root: "▣", logs: "▤", previews: "◉", recordings: "▦",
+                   spool: "≡", auth: "⚿", nas_root: "◈", launchagents: "⚙" };
+async function loadGuideFolders() {
+  const wrap = document.getElementById("guide-groups");
+  if (!wrap) return;
+  let data;
+  try {
+    data = await (await fetch("/api/folders")).json();
+  } catch (e) {
+    wrap.innerHTML = `<div class="hint">目录清单加载失败:${esc(String(e))}</div>`;
+    return;
+  }
+  wrap.innerHTML = "";
+  (data.groups || []).forEach(g => {
+    const box = document.createElement("div");
+    box.className = "guide-group";
+    box.innerHTML = `<div class="guide-group-title">${esc(g.group)}</div>`;
+    const grid = document.createElement("div");
+    grid.className = "guide-grid";
+    (g.items || []).forEach(it => {
+      const b = document.createElement("button");
+      b.className = "guide-item" + (it.exists ? "" : " disabled");
+      b.title = (it.exists ? "在 Finder 中打开:" : "目录不存在:") + (it.path || "");
+      b.innerHTML = `<span class="gi-ic">${esc(GUIDE_IC[it.key] || "▦")}</span>`
+        + `<span class="gi-main"><span class="gi-name">${esc(it.name)}</span>`
+        + `<span class="gi-path">${esc(it.path || "—")}</span></span>`;
+      b.addEventListener("click", async () => {
+        if (!it.exists) return;
+        try {
+          const res = await (await fetch("/api/folders/open", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ key: it.key }) })).json();
+          gtoast(res.ok ? `已打开「${it.name}」` : (res.error || "打开失败"));
+        } catch (e) { gtoast("打开失败:" + e); }
+      });
+      grid.appendChild(b);
+    });
+    box.appendChild(grid);
+    wrap.appendChild(box);
+  });
+}
+
+/* ── 系统健康面板(方案 B)──
+   常驻任务按「最后心跳距今多久」判定,进程层与外部依赖由后端现算注入。
+   这里只展示,不做任何自愈动作 —— 健康检查本身不应该成为新的故障源。 */
+let healthTimer = null;
+const H_LABEL = { ok: "正常", warn: "降级", down: "故障", idle: "空闲" };
+
+function fmtAge(s) {
+  if (s === null || s === undefined) return "—";
+  if (s < 60) return `${Math.round(s)} 秒前`;
+  if (s < 3600) return `${Math.floor(s / 60)} 分前`;
+  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
+  return `${Math.floor(s / 86400)} 天前`;
+}
+
+async function loadHealth() {
+  const wrap = document.getElementById("h-groups");
+  if (!wrap) return;
+  let d;
+  try {
+    const res = await fetch("/api/health");
+    if (res.status === 404) {
+      // 前端是 no-store 即时生效的,但新接口要等服务重启后才存在
+      const sum0 = document.getElementById("h-summary");
+      if (sum0) { sum0.textContent = "需重启服务"; sum0.style.color = "var(--warn)"; }
+      wrap.innerHTML = `<div class="hint">当前运行的服务还是旧版本,没有这个接口。
+        双击项目根目录的 <code>一键启动.command</code>(或在没人开播时重启)后即可使用。</div>`;
+      return;
+    }
+    d = await res.json();
+  } catch (e) {
+    wrap.innerHTML = `<div class="hint">健康状态加载失败:${esc(String(e))}</div>`;
+    return;
+  }
+  const c = d.counts || {};
+  const sum = document.getElementById("h-summary");
+  if (sum) {
+    const parts = [`${c.ok || 0} 正常`];
+    if (c.warn) parts.push(`${c.warn} 降级`);
+    if (c.down) parts.push(`${c.down} 故障`);
+    if (c.idle) parts.push(`${c.idle} 空闲`);
+    sum.textContent = `${parts.join(" · ")} · 已运行 ${fmtDur(d.uptime_s)}`;
+    sum.style.color = d.failed ? "var(--danger)"
+      : (d.degraded ? "var(--warn)" : "var(--ok)");
+  }
+  wrap.innerHTML = "";
+  (d.groups || []).forEach(g => {
+    const box = document.createElement("div");
+    box.className = "h-group";
+    box.innerHTML = `<div class="h-group-title">${esc(g.name)}</div>`;
+    const grid = document.createElement("div");
+    grid.className = "h-grid";
+    (g.items || []).forEach(it => {
+      const el = document.createElement("div");
+      el.className = "h-item " + it.status;
+      const cnt = (it.count !== null && it.count !== undefined && it.count > 0)
+        ? `<span class="h-count">×${esc(String(it.count))}</span>` : "";
+      // inject 类(进程层/外部依赖)是现算的,展示实时结论;
+      // beat 类展示心跳年龄 —— 那才是判断协程是否卡死的依据。
+      const foot = it.source === "inject"
+        ? `<span class="h-detail">${esc(it.detail || "—")}</span>`
+        : `<span class="h-detail">${esc(it.detail || H_LABEL[it.status] || "")}</span>`
+          + `<span class="h-age">${it.last_beat ? fmtAge(it.age_s) : "无心跳"}</span>`;
+      el.innerHTML = `<span class="h-dot ${it.status}"></span>`
+        + `<span class="h-main"><span class="h-name">${esc(it.name)}${cnt}</span>`
+        + `<span class="h-desc">${esc(it.desc || "")}</span></span>`
+        + `<span class="h-foot">${foot}</span>`;
+      grid.appendChild(el);
+    });
+    box.appendChild(grid);
+    wrap.appendChild(box);
+  });
+}
+
+function fmtDur(sec) {
+  sec = Number(sec) || 0;
+  if (sec < 60) return sec + " 秒";
+  if (sec < 3600) return Math.floor(sec / 60) + " 分";
+  if (sec < 86400) {
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+    return m ? `${h} 小时 ${m} 分` : `${h} 小时`;
+  }
+  const d2 = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600);
+  return h ? `${d2} 天 ${h} 小时` : `${d2} 天`;
+}
+
+/* ── 系统健康页:终端快捷指令清单 ──
+   内容来自 GET /api/shortcuts,而后端直接取自 scripts/ctl.py 的 COMMANDS 表 ——
+   终端 `douyin help`、一键启动窗口、这张卡片,三处同源。
+   所以这里只负责排版,**不在前端硬编码任何命令名**:后端加了新命令这张表自动跟上。
+   (本项目踩过「两个入口各写一份、只修了一边」的坑,命令清单同理。) */
+let shortcutsLoaded = false;
+
+async function loadShortcuts(force) {
+  const box = document.getElementById("sc-body");
+  if (!box || (shortcutsLoaded && !force)) return;
+  const sum = document.getElementById("sc-sum");
+  let d;
+  try {
+    const res = await fetch("/api/shortcuts");
+    if (res.status === 404) {
+      // 前端即时生效,但新接口要等服务重启后才存在(与健康面板同一降级策略)
+      if (sum) { sum.textContent = "需重启服务"; sum.style.color = "var(--warn)"; }
+      box.innerHTML = `<div class="hint">当前运行的服务还是旧版本,没有这个接口。
+        终端敲 <code>douyin restart</code>(或双击项目根目录的 <code>一键启动.command</code>)
+        重启后即可显示。</div>`;
+      return;
+    }
+    d = await res.json();
+  } catch (e) {
+    if (sum) { sum.textContent = "加载失败"; sum.style.color = "var(--danger)"; }
+    box.innerHTML = `<div class="hint">快捷指令加载失败:${esc(String(e))}</div>`;
+    return;
+  }
+  if (!d.ok) {
+    if (sum) { sum.textContent = "清单源不可用"; sum.style.color = "var(--danger)"; }
+    box.innerHTML = `<div class="hint">读不到命令清单:${esc(d.error || "")}<br>
+      在项目根目录执行 <code>${esc(d.install || "")}</code> 修复后重试。</div>`;
+    return;
+  }
+  shortcutsLoaded = true;
+  if (sum) {
+    sum.textContent = `${d.rows.length} 条命令 · ${d.aliases.length} 个短别名`;
+    sum.style.color = "var(--ok)";
+  }
+
+  const cells = (d.rows || []).map(r => `<tr>
+      <td><span class="sc-cmd" data-copy="${esc(r.usage)}" title="点击复制">${esc(r.usage)}<span class="dy-ic">⧉</span></span></td>
+      <td class="sc-alias">${(r.aliases && r.aliases.length) ? esc(r.aliases.join(" / ")) : "—"}</td>
+      <td class="sc-fx">${esc(r.effect)}</td>
+    </tr>`).join("");
+
+  box.innerHTML = `
+    <table class="sc-table">
+      <thead><tr><th>命令</th><th>别名</th><th>作用</th></tr></thead>
+      <tbody>${cells}</tbody>
+    </table>
+    <div class="sc-sub">
+      <div><b>短别名</b>(新开终端窗口,或先执行一次 <code>exec zsh</code> 生效):
+        ${(d.aliases || []).map(a => `<code>${esc(a.alias)}</code> ${esc(a.note)}`).join(" · ")}</div>
+      <div style="margin-top:6px"><b>开关</b>:
+        ${(d.options || []).map(o => `<code>${esc(o.flag)}</code> ${esc(o.note)}`).join(" · ")}</div>
+    </div>
+    <div class="sc-sub sc-warn">
+      ${(d.notes || []).map(n => `<div>· ${esc(n)}</div>`).join("")}
+    </div>
+    ${d.installed ? "" : `<div class="sc-sub sc-warn">▲ 还没装终端入口(找不到
+      <code>${esc(d.entry || "~/.local/bin/douyin")}</code>):在项目根目录执行
+      <code>${esc(d.install)}</code> 安装,装完 <code>douyin</code> / <code>dy</code> 就能用了。</div>`}`;
+}
+
+// 命令格点击即复制。复制逻辑与主播卡的抖音号胶囊共用(见 copyValue),
+// 但那个委托监听挂在 #streamer-list 上,健康页这边要自己挂一份。
+(() => {
+  const box = document.getElementById("sc-body");
+  if (!box) return;
+  box.addEventListener("click", e => {
+    const cp = e.target.closest("[data-copy]");
+    if (cp && cp.dataset.copy) copyValue(cp);
+  });
+})();
+
+/* ── 项目指引:孤儿目录延迟清理 ──
+   主播卡片删除 → 目录登记进台账 → 满 30 天且确认已归档才真正删除。
+   这里只做展示与手动触发;日常由后端每 6 小时自动巡检。 */
+async function loadRetention() {
+  const box = document.getElementById("rt-list");
+  if (!box) return;
+  let d;
+  try {
+    d = await (await fetch("/api/retention")).json();
+  } catch (e) {
+    box.innerHTML = `<div class="hint">台账加载失败:${esc(String(e))}</div>`;
+    return;
+  }
+  const grace = d.grace_days || 30;
+  const gEl = document.getElementById("rt-grace");
+  if (gEl) gEl.textContent = String(grace);
+  const items = d.items || [];
+  if (!items.length) {
+    box.innerHTML = `<div class="hint">当前没有待清理的孤儿目录。删除主播卡片后,
+      其 <code>previews/</code> 与 <code>recordings/</code> 目录会先在这里登记,
+      满 ${grace} 天才真正清理。</div>`;
+    return;
+  }
+  box.innerHTML = "";
+  items.forEach(it => {
+    const row = document.createElement("div");
+    row.className = "rt-item";
+    let tag, cls;
+    if (it.re_added) { tag = "主播已加回,取消清理"; cls = "ok"; }
+    else if (!it.ready) { tag = `还剩 ${it.days_left} 天`; cls = "wait"; }
+    else if (it.archive && it.archive.blocked) { tag = "归档未确认,已拦下"; cls = "block"; }
+    else { tag = "可清理"; cls = "ready"; }
+    row.innerHTML = `<span class="rt-name">${esc(it.name)}</span>`
+      + `<span class="rt-dirs">${esc((it.dirs || []).join("、"))}</span>`
+      + `<span class="rt-tag ${cls}">${tag}</span>`
+      + `<span class="rt-sub">已登记 ${it.age_days} 天${it.archive && it.archive.reason
+          ? " · " + esc(it.archive.reason) : ""}</span>`;
+    box.appendChild(row);
+  });
+}
+const hBtn = document.getElementById("h-refresh");
+if (hBtn) hBtn.addEventListener("click", loadHealth);
+document.getElementById("rt-sweep-dry").addEventListener("click", () => runRetentionSweep(false));
+document.getElementById("rt-sweep-apply").addEventListener("click", () => runRetentionSweep(true));
+async function runRetentionSweep(apply) {
+  let r;
+  try {
+    r = await (await fetch("/api/retention/sweep", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apply }) })).json();
+  } catch (e) { gtoast("请求失败:" + e); return; }
+  if (!r.ok) { gtoast(r.error || "失败"); return; }
+  const n = (r.deleted || []).length;
+  if (!apply) {
+    gtoast(n ? `试算:${n} 个目录将被清理` : "试算:暂无到期可清理项");
+  } else {
+    gtoast(n ? `已清理 ${n} 个孤儿目录` : "暂无到期可清理项");
+  }
+  (r.skipped || []).slice(0, 3).forEach(s => gtoast(`${s.name}: ${s.reason}`));
+  loadRetention();
+}
+
+/* ── 表单渲染 ── */
+function renderFields(fields, containerId) {
+  const grid = document.getElementById(containerId);
+  fields.forEach(([path, label, type, unit, hint]) => {
+    const d = document.createElement("div"); d.className = "field";
+    const lab = document.createElement("label"); lab.textContent = label;
+    const ctl = document.createElement("div"); ctl.className = "ctl";
+    let inp;
+    if (type === "select") {
+      inp = document.createElement("select");
+      unit.forEach(o => { const x = document.createElement("option"); x.value = x.textContent = o; inp.appendChild(x); });
+    } else if (type === "bool") {
+      inp = document.createElement("select");
+      inp.dataset.bool = "1";
+      [["true", "开启"], ["false", "关闭"]].forEach(([v, t]) => {
+        const x = document.createElement("option"); x.value = v; x.textContent = t; inp.appendChild(x);
+      });
+    } else {
+      inp = document.createElement("input"); inp.type = type;
+      if (type === "number") inp.step = "any";
+    }
+    inp.dataset.path = path;
+    ctl.appendChild(inp);
+    if (unit && !Array.isArray(unit)) { const u = document.createElement("span"); u.className = "unit"; u.textContent = unit; ctl.appendChild(u); }
+    d.appendChild(lab); d.appendChild(ctl);
+    if (hint) { const h = document.createElement("span"); h.className = "hint"; h.textContent = hint; d.appendChild(h); }
+    grid.appendChild(d);
+  });
+}
+function renderTextFields(fields, containerId) {
+  const grid = document.getElementById(containerId);
+  fields.forEach(([path, label, hint]) => {
+    const d = document.createElement("div"); d.className = "field wide";
+    const lab = document.createElement("label"); lab.textContent = label;
+    const ta = document.createElement("textarea"); ta.dataset.path = path;
+    d.appendChild(lab); d.appendChild(ta);
+    if (hint) { const h = document.createElement("span"); h.className = "hint"; h.textContent = hint; d.appendChild(h); }
+    grid.appendChild(d);
+  });
+}
+
+/* ── 主播列表 ── */
+function phaseOf(name) {
+  const st = liveMap[name];
+  if (!st) return { key: "wait", label: "待启动" };
+  const map = { "直播中": "live", "热点": "hot", "冷门": "cold", "冷却": "cooldown",
+                "缺web_rid": "warn", "未监测": "off" };
+  return { key: map[st.phase] || "cold", label: st.phase };
+}
+function fmtSec(s) {
+  if (s == null) return "—";
+  s = Math.round(s);
+  if (s < 60) return s + " 秒";
+  if (s < 3600) return Math.round(s / 60) + " 分";
+  return (s / 3600).toFixed(1) + " 时";
+}
+const expandedStreamers = new Set();   // 展开详情的主播名集合
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+// ── 搜索与排序 ──────────────────────────────────────────────
+// 搜索只匹配「姓名」和「抖音号」两个字段;sec_uid / web_rid 是内部标识,不参与。
+let filterText = "";
+let sortKey = "recent";
+let sortDesc = true;
+try {
+  sortKey = localStorage.getItem("strSortKey") || "recent";
+  sortDesc = localStorage.getItem("strSortDesc") !== "0";
+} catch (e) { /* 隐私模式下 localStorage 不可用,用默认值 */ }
+
+function _lastLiveTs(name) {
+  const st = liveMap[name];
+  if (!st) return 0;
+  const h = st.hotspot;
+  let ts = (h && h.last_hit) ? (Number(h.last_hit) || 0) : 0;
+  if (st.is_live) {
+    // 正在开播:本场开播时间比热点 last_hit 更直接(刚开播时热点可能还没落盘),
+    // 取两者较大值,这样「正在开播」的几位之间也能按开播先后排序。
+    const r = recMap[name];
+    if (r && r.started_at) ts = Math.max(ts, Number(r.started_at) || 0);
+    if (!ts) ts = 9e15;                              // 完全没有时间戳时才退化为置顶
+  }
+  return ts;
+}
+function _isLive(name) { return !!(liveMap[name] && liveMap[name].is_live); }
+
+// 按名字取主播配置(卡面开关/备注用)。找不到返回 null,调用方自行兜底。
+function _monOf(name) {
+  return (config.monitors || []).find(m => m.name === name) || null;
+}
+// 是否「开播即录」。字段缺失按「开」处理:本开关后加,历史主播配置里没有这一项,
+// 而它们原本就是每场都录,不能因为缺字段就悄悄变成不录。
+function _autoRecord(name) {
+  const m = _monOf(name);
+  return !m || m.auto_record !== false;
+}
+
+// 后端补齐 added_at 要等服务重启才生效(补写逻辑在 update_config 里),
+// 这里在前端兜底:缺失的按配置数组顺序、以当前时间为基准往前推每分钟一个。
+// 与后端同公式,所以重启前后排序结果一致;仅用于排序,不写回配置文件。
+function ensureAddedAt() {
+  const mons = config.monitors || [];
+  if (!mons.some(m => !m.added_at)) return;
+  const now = Math.round(Date.now() / 1000);
+  const n = mons.length;
+  mons.forEach((m, i) => { if (!m.added_at) m.added_at = now - (n - i) * 60; });
+}
+
+function visibleMonitors() {
+  const q = filterText.trim().toLowerCase();
+  let list = (config.monitors || []).filter(m =>
+    !q || (m.name || "").toLowerCase().includes(q)
+       || (m.douyin_id || "").toLowerCase().includes(q));
+  // 比较器一律按「升序」语义写,降序由外层取反得到 —— 这样同值元素保持
+  // 稳定的相对顺序(reverse() 会把相等项也翻过来,造成卡片莫名跳动)。
+  const cmp = {
+    // 「最近开播」:正在开播的置顶,其余按最近一次开播时间
+    recent: (a, b) => (_isLive(a.name) ? 1 : 0) - (_isLive(b.name) ? 1 : 0)
+                 || _lastLiveTs(a.name) - _lastLiveTs(b.name),
+    live: (a, b) => (_isLive(a.name) ? 1 : 0) - (_isLive(b.name) ? 1 : 0)
+                 || _lastLiveTs(a.name) - _lastLiveTs(b.name),
+    added: (a, b) => (Number(a.added_at) || 0) - (Number(b.added_at) || 0),
+  }[sortKey] || (() => 0);
+  return list.slice().sort(sortDesc ? (a, b) => cmp(b, a) : cmp);
+}
+
+// 排序依赖 liveMap(开播时间),而 liveMap 是 /api/status 异步拉回来的:
+// 首屏 renderStreamers() 时它还是空的,卡片只能按配置顺序铺开。
+// 这里在状态刷新后就地调整卡片顺序 —— 只移动已有 DOM 节点,不重建,
+// 所以详情展开、头像、hover 状态都不会丢,也不会每 3 秒重绘一遍。
+function reorderStreamers() {
+  const wrap = document.getElementById("streamer-list");
+  if (!wrap) return;
+  const cards = Array.from(wrap.querySelectorAll(".streamer"));
+  if (!cards.length) return;                       // 空态(无匹配)由 renderStreamers 负责
+  const ae = document.activeElement;
+  if (ae && wrap.contains(ae)) return;             // 卡片内有焦点(刚点过按钮),先别动顺序
+  const order = visibleMonitors().map(m => m.name);
+  const cur = cards.map(el => el.dataset.name);
+  if (order.length !== cur.length) return;         // 数量对不上,交给 renderStreamers 全量重绘
+  if (order.every((n, i) => n === cur[i])) return; // 顺序没变,不动 DOM
+  const byName = new Map(cards.map(el => [el.dataset.name, el]));
+  order.forEach(n => { const el = byName.get(n); if (el) wrap.appendChild(el); });
+}
+
+function renderStreamers() {
+  ensureAddedAt();
+  const wrap = document.getElementById("streamer-list");
+  const list = visibleMonitors();
+  const total = (config.monitors || []).length;
+  const cnt = document.getElementById("str-count");
+  if (cnt) cnt.textContent = (list.length === total)
+    ? `共 ${total} 位` : `匹配 ${list.length} / 共 ${total} 位`;
+  wrap.innerHTML = "";
+  if (!list.length) {
+    const q = filterText.trim();
+    wrap.innerHTML = q
+      ? `<div class="tb-empty">没有匹配「${esc(q)}」的主播 · 搜索只认姓名和抖音号</div>`
+      : '<div class="tb-empty">暂无主播,点上方「添加主播」展开表单</div>';
+    return;
+  }
+  list.forEach(m => {
+    const st = liveMap[m.name];
+    const ph = phaseOf(m.name);
+    const live = st && st.is_live;
+    const el = document.createElement("div");
+    el.className = "streamer"; el.dataset.name = m.name;
+    el.innerHTML = `
+      <div class="s-banner">
+        <div class="s-avlayer" data-preview="${esc(m.name)}"></div>
+        <div class="s-top">
+          <div class="s-main">
+            <div class="s-name-row">
+              <span class="dot-live ${live ? "on" : "off"}"></span>
+              <span class="s-name"></span>
+              <span class="badge ${ph.key}"></span>
+            </div>
+            <div class="s-dyid" title="点击复制"></div>
+          </div>
+        </div>
+        <div class="s-state">
+          <b class="st-rec-state">待机</b>
+          <span class="st-recent"></span>
+        </div>
+        <div class="s-sched"></div>
+        <div class="s-extra">
+          <label class="ar-sw" title="开播即自动录制;关掉后只检测不录制,开播时可手动点「开始」录这一场">
+            <input type="checkbox" class="ar-cb">
+            <span class="ar-track"><span class="ar-dot"></span></span>
+            <span class="ar-txt">自动录制</span>
+          </label>
+          <button class="btn btn-ghost s-note-btn" data-note="${esc(m.name)}" title="备注(点击查看/编辑)">备注</button>
+        </div>
+        <div class="s-rec"></div>
+        <div class="s-actions">
+          <button class="btn btn-ghost btn-rec" data-rec="${esc(m.name)}" style="display:none" title="停止/开始录制">停止</button>
+          <button class="btn btn-ghost" data-preview="${esc(m.name)}" title="管理主页截图(预览图)">截图</button>
+          <button class="btn btn-ghost" data-refresh="${esc(m.name)}" title="立即检测一次(不影响下次检测时间)">刷新</button>
+          <button class="btn btn-ghost" data-detail="${esc(m.name)}" title="展开/收起详情">详情 ▾</button>
+          <button class="btn btn-ghost" data-del="${esc(m.name)}" title="删除">删除</button>
+        </div>
+      </div>
+      <div class="s-detail"></div>`;
+    el.querySelector(".s-name").textContent = m.name;
+    // 卡面抖音号做成可点击复制的胶囊:既是 ID 展示区也是复制入口,
+    // 不必再展开详情去点「复制」。没有抖音号时退回 web_rid(同样可复制),
+    // 两者都缺才渲染成不可点击的占位。
+    const dyid = el.querySelector(".s-dyid");
+    const copyVal = m.douyin_id || m.web_rid || "";
+    if (copyVal) {
+      dyid.className = "s-dyid";
+      dyid.dataset.copy = copyVal;
+      dyid.title = "点击复制" + (m.douyin_id ? "抖音号" : "直播间号");
+      dyid.innerHTML = `<span class="dy-txt">${m.douyin_id ? "抖音号 " : "web_rid "}${esc(copyVal)}</span><span class="dy-ic">⧉</span>`;
+    } else {
+      dyid.className = "s-dyid none";
+      dyid.removeAttribute("data-copy");
+      dyid.title = "未填抖音号 · 展开「详情」查看其它 ID";
+      dyid.innerHTML = `<span class="dy-txt">未填抖音号</span>`;
+    }
+    // 自动录制开关:字段缺失按「开」处理 —— 本开关是后加的,历史主播配置
+    // 里没有这一项,它们原本就是每场都录,不能因为缺字段就变成不录。
+    const cb = el.querySelector(".ar-cb");
+    cb.checked = (m.auto_record !== false);
+    // 备注不在卡面展开(文字长短不一会顶乱排版,也没人想在卡片上读长句):
+    // 有内容时按钮点个绿点做记号,要看/要改点一下弹悬浮窗。
+    const nb = el.querySelector(".s-note-btn");
+    const hasNote = !!String(m.note || "").trim();
+    nb.classList.toggle("has", hasNote);
+    nb.title = hasNote ? "备注(点击查看/编辑)" : "添加备注";
+    // 头像(取自选中主页截图):有预览图铺满左侧横幅,否则显示首字母;点击打开截图管理
+    const av = el.querySelector(".s-avlayer");
+    if (m.preview) {
+      av.innerHTML = `<img src="/previews/${encodeURIComponent(m.name)}/${encodeURIComponent(m.preview)}" alt="${esc(m.name)}">`;
+      av.title = "点击管理主页截图";
+    } else {
+      av.innerHTML = `<span class="s-av-init">${esc((m.name || "?").trim().charAt(0) || "?")}</span>`;
+      av.title = "点击设置主页截图";
+    }
+    // 二级详情面板:完整 ID(可复制) + 调度信息 + 主页截图缩略图
+    const det = el.querySelector(".s-detail");
+    det.innerHTML = `
+      <div class="detail-cols">
+        <div class="detail-sec">
+          <h4>身份信息</h4>
+          <div class="id-row"><span class="k">sec_uid</span><code>${esc(m.anchor) || "—"}</code>${m.anchor ? `<button class="btn btn-ghost" data-copy="${esc(m.anchor)}">复制</button>` : ""}</div>
+          <div class="id-row"><span class="k">web_rid</span><code>${esc(m.web_rid) || "—"}</code>${m.web_rid ? `<button class="btn btn-ghost" data-copy="${esc(m.web_rid)}">复制</button>` : ""}</div>
+          <div class="id-row"><span class="k">抖音号</span><code>${esc(m.douyin_id) || "—"}</code>${m.douyin_id ? `<button class="btn btn-ghost" data-copy="${esc(m.douyin_id)}">复制</button>` : ""}</div>
+          <div class="s-meta" style="margin-top:10px">
+            <span>热点窗口 <b class="m-windows">—</b></span>
+            <span>检测方式 <b class="m-method">—</b></span>
+            <span>下次检测 <b class="m-next">—</b></span>
+          </div>
+        </div>
+        <div class="detail-sec">
+          <h4>主页截图 <span class="sub">(头像取自选中截图,点击缩略图管理)</span></h4>
+          <div class="shot-grid"><span class="s-shots-empty">加载中…</span></div>
+        </div>
+      </div>`;
+    if (expandedStreamers.has(m.name)) {
+      el.classList.add("open");
+      const db = el.querySelector("[data-detail]");
+      if (db) db.textContent = "收起 ▴";
+      loadShots(m.name, el.querySelector(".shot-grid"));
+    }
+    el.querySelector(".badge").textContent = ph.label;
+    wrap.appendChild(el);
+  });
+  updateStreamers();
+}
+async function loadShots(name, grid) {
+  if (!grid) return;
+  try {
+    const r = await (await fetch("/api/previews/" + encodeURIComponent(name))).json();
+    if (!grid.isConnected) return;   // 卡片已重建则丢弃
+    grid.innerHTML = "";
+    if (!r.images || !r.images.length) {
+      grid.innerHTML = '<span class="s-shots-empty">暂无截图,开播后自动抓取,或点上方「截图」上传</span>';
+      return;
+    }
+    r.images.forEach(fn => {
+      const d = document.createElement("div");
+      d.className = "shot" + (fn === r.selected ? " sel" : "");
+      d.title = (fn === r.selected ? "当前预览 · " : "") + "点击管理";
+      d.innerHTML = `<img src="/previews/${encodeURIComponent(name)}/${encodeURIComponent(fn)}" alt="">`;
+      d.addEventListener("click", () => openPreview(name));
+      grid.appendChild(d);
+    });
+  } catch (e) { if (grid.isConnected) grid.innerHTML = '<span class="s-shots-empty">截图加载失败</span>'; }
+}
+function updateStreamers() {
+  document.querySelectorAll(".streamer").forEach(el => {
+    const name = el.dataset.name;
+    const st = liveMap[name];
+    const ph = phaseOf(name);
+    const live = st && st.is_live;
+    const rec = recMap[name];
+    const badge = el.querySelector(".badge");
+    badge.textContent = ph.label; badge.className = "badge " + ph.key;
+    el.querySelector(".dot-live").className = "dot-live " + (live ? "on" : "off");
+    // 状态块:录制状态(主) + 最近开播(次,未开播时显示)
+    const recState = el.querySelector(".st-rec-state");
+    const recentEl = el.querySelector(".st-recent");
+    const recEl = el.querySelector(".s-rec");
+    const recBtn = el.querySelector(".btn-rec");
+    const dormant = !!(st && st.phase === "未监测");   // 关掉自动录制 = 休眠,不检测
+    recState.classList.remove("on", "rec");
+    if (live && rec && rec.recording) {
+      // 时长与历史页同公式(客户端实时墙钟差),消除两页面对不上的偏差
+      const dur = Date.now() / 1000 - (rec.started_at || 0);
+      recState.textContent = "● 录制中 " + fmtDur(dur);
+      recState.classList.add("rec");
+      recentEl.textContent = "";
+      const bitrate = (config.recorder && config.recorder.bitrate) || 0;
+      const folder = rec.output_path ? rec.output_path.split("/").slice(0, -1).join("/") : "";
+      let line1 = `<span class="rec-dot"></span>已录 <b>${fmtDur(dur)}</b>`;
+      if (bitrate > 0) {
+        const estBytes = bitrate * 1000 * dur / 8;
+        line1 += ` · 码率 <b>${bitrate}K</b> · 预估 <b>${fmtSize(estBytes)}</b>`;
+      }
+      let html = `<div class="rec-line">${line1}</div>` +
+        (folder ? `<div class="rec-sub rec-path-row">` +
+          `<span class="rp-lbl">开播 ${fmtClock(rec.started_at)}</span>` +
+          `${pathChips(folder)}</div>` : "");
+      // 假在线告警:ffmpeg 存活但文件不再增长(流已断),到阈值自动重启止损
+      if (rec.stalled) {
+        const lim = (config.recorder && config.recorder.stall_seconds) || 90;
+        html += `<div class="rec-warn">⚠ 数据流中断,<b>${fmtDur(rec.stall_seconds || 0)}</b> 未写入新数据` +
+          ` · 满 ${lim}s 自动重启${rec.restarts ? ` · 本场已重启 <b>${rec.restarts}</b> 次` : ""}</div>`;
+      }
+      recEl.innerHTML = html;
+      recBtn.style.display = "";
+      recBtn.textContent = "停止";
+      recBtn.dataset.action = "stop";
+    } else if (live) {
+      recState.textContent = "● 直播中";
+      recState.classList.add("on");
+      recentEl.textContent = "";
+      // 关掉自动录制时把话说清楚:不是录制坏了,是这位主播只检测不自动录
+      recEl.innerHTML = _autoRecord(name)
+        ? `<div class="rec-line" style="color:var(--muted)">检测到直播,录制已暂停或等待中…</div>`
+        : `<div class="rec-line" style="color:var(--muted)">已关自动录制 · 需要就点「开始」录这一场</div>`;
+      recBtn.style.display = "";
+      recBtn.textContent = "开始";
+      recBtn.dataset.action = "start";
+    } else {
+      // 休眠(关了自动录制 → 连检测都不跑):明确写「休眠」,别让旧状态留在卡上
+      // 让人以为他还在被监测
+      recState.textContent = dormant ? "休眠" : (_autoRecord(name) ? "待机" : "待机 · 手动录");
+      recEl.innerHTML = "";
+      recBtn.style.display = "none";
+      // 未开播:显示最近开播时间(来自热点数据)
+      if (st && st.hotspot && st.hotspot.last_hit) {
+        recentEl.textContent = "上次开播 " + fmtShortTime(st.hotspot.last_hit);
+      } else {
+        recentEl.textContent = "";
+      }
+    }
+    // 卡面调度信息行(方案 B):不展开详情就能看到下次检测与热点窗口。
+    // 「检测方式」移回详情面板 —— 不常用、且值常常为 —,放这里会撑高卡。
+    const sched = el.querySelector(".s-sched");
+    if (sched) {
+      if (dormant) {
+        // 休眠主播没有「下次检测」:不检测了。把怎么用说清楚,免得以为坏了
+        sched.innerHTML = `<span style="color:var(--muted)">已休眠 · 不自动检测,点「刷新」可手动查一次</span>`;
+      } else {
+        const nx = st ? fmtSec(st.next_in) : "—";
+        const w = st && st.windows != null ? st.windows : "—";
+        sched.innerHTML = `<span>下次检测 <b>${esc(String(nx))}</b></span>`
+          + `<span>热点窗口 <b>${esc(String(w))}</b></span>`;
+      }
+    }
+    // 详情面板内的调度信息(面板未展开时字段不存在,忽略)
+    const w = el.querySelector(".s-detail .m-windows");
+    if (w) w.textContent = st ? st.windows : "—";
+    const mth = el.querySelector(".s-detail .m-method");
+    if (mth) mth.textContent = st ? (st.method || "—") : "—";
+    const nx = el.querySelector(".s-detail .m-next");
+    if (nx) nx.textContent = st ? fmtSec(st.next_in) : "—";
+  });
+  reorderStreamers();   // 状态变了可能改变「最近开播」次序,就地调整卡片顺序
+}
+function fmtClock(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000);
+  const p = n => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function fmtShortTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  const p = n => String(n).padStart(2, "0");
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const hm = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  return sameDay ? `今天 ${hm}` : `${p(d.getMonth() + 1)}-${p(d.getDate())} ${hm}`;
+}
+function fmtDur(s) {
+  if (s == null) return "—";
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+document.getElementById("add-btn").addEventListener("click", addStreamer);
+// 添加主播表单默认折叠,点标题展开
+document.getElementById("add-toggle").addEventListener("click", () => {
+  document.getElementById("add-card").classList.toggle("open");
+});
+// 搜索 / 排序工具条
+const strSearch = document.getElementById("str-search");
+strSearch.addEventListener("input", () => { filterText = strSearch.value; renderStreamers(); });
+const strSort = document.getElementById("str-sort");
+strSort.value = sortKey;
+strSort.addEventListener("change", () => {
+  sortKey = strSort.value;
+  try { localStorage.setItem("strSortKey", sortKey); } catch (e) {}
+  renderStreamers();
+});
+const strDir = document.getElementById("str-dir");
+function syncSortDir() {
+  strDir.textContent = sortDesc ? "↓" : "↑";
+  strDir.title = sortDesc ? "当前降序,点击切为升序" : "当前升序,点击切为降序";
+}
+strDir.addEventListener("click", () => {
+  sortDesc = !sortDesc;
+  try { localStorage.setItem("strSortDesc", sortDesc ? "1" : "0"); } catch (e) {}
+  syncSortDir();
+  renderStreamers();
+});
+syncSortDir();
+document.getElementById("parse-link").addEventListener("click", parseLink);
+async function parseLink() {
+  const text = document.getElementById("add-link").value.trim();
+  if (!text) return;
+  const btn = document.getElementById("parse-link");
+  if (btn.dataset.busy) return;
+  btn.dataset.busy = "1"; btn.textContent = "解析中…";
+  try {
+    const r = await (await fetch("/api/resolve", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text })
+    })).json();
+    if (!r.ok) { alert("解析失败: " + (r.error || "")); return; }
+    if (r.nickname && !document.getElementById("add-name").value.trim())
+      document.getElementById("add-name").value = r.nickname;
+    if (r.sec_uid) document.getElementById("add-anchor").value = r.sec_uid;
+    if (r.web_rid) document.getElementById("add-webrid").value = r.web_rid;
+    document.getElementById("add-link").value = "";
+  } catch (e) {
+    alert("解析失败: " + e);
+  } finally {
+    delete btn.dataset.busy; btn.textContent = "解析";
+  }
+}
+function addStreamer() {
+  const name = document.getElementById("add-name").value.trim();
+  const anchor = document.getElementById("add-anchor").value.trim();
+  const web_rid = document.getElementById("add-webrid").value.trim();
+  const douyin_id = document.getElementById("add-douyinid").value.trim();
+  if (!name || !anchor) return;
+  config.monitors = config.monitors || [];
+  if (config.monitors.some(m => m.name === name)) { alert("主播名已存在"); return; }
+  // 新加的主播默认「不自动录」:主播多了以后多数是想按需录某一场,
+  // 真要每场都录,在卡片上把「自动录制」打开即可(历史主播不受影响)。
+  const mon = { name, anchor, added_at: Math.round(Date.now() / 1000),
+                auto_record: false, note: "" };
+  if (web_rid) mon.web_rid = web_rid;
+  if (douyin_id) mon.douyin_id = douyin_id;
+  config.monitors.push(mon);
+  // 新主播若不匹配当前搜索词会被立刻过滤掉,看着像"添加没生效" —— 此时清掉筛选
+  const q = filterText.trim().toLowerCase();
+  if (q && !(`${name} ${douyin_id}`.toLowerCase().includes(q))) {
+    filterText = "";
+    const si = document.getElementById("str-search");
+    if (si) si.value = "";
+  }
+  document.getElementById("add-name").value = "";
+  document.getElementById("add-anchor").value = "";
+  document.getElementById("add-webrid").value = "";
+  document.getElementById("add-douyinid").value = "";
+  saveMonitors();
+  renderStreamers();
+}
+document.getElementById("streamer-list").addEventListener("click", e => {
+  // 备注:卡面只留一个按钮,内容在悬浮窗里看/改
+  const ntBtn = e.target.closest("[data-note]");
+  if (ntBtn) { openNote(ntBtn.dataset.note); return; }
+  const rb = e.target.closest("[data-refresh]");
+  if (rb) { refreshStreamer(rb.dataset.refresh, rb); return; }
+  const recBtn = e.target.closest("[data-rec]");
+  if (recBtn) { toggleRec(recBtn.dataset.rec, recBtn.dataset.action, recBtn); return; }
+  // 路径面包屑:点在胶囊上 = 在 Finder 打开该层级;
+  // 点在胶囊之间的空隙 = 弹出旧的路径菜单(复制路径等)
+  const fdEl = e.target.closest("[data-folder]");
+  if (fdEl) { openFolder(fdEl.dataset.folder, "reveal"); return; }
+  // 路径弹菜单(录制文件夹)
+  const pmEl = e.target.closest("[data-path-menu]");
+  if (pmEl) { showPathMenu(e.clientX, e.clientY, pmEl.dataset.pathMenu); return; }
+  const openEl = e.target.closest("[data-open]");
+  if (openEl) { openFolder(openEl.dataset.open); return; }
+  // ID 一键复制(卡面抖音号胶囊 / 详情面板复制按钮共用)
+  const cp = e.target.closest("[data-copy]");
+  if (cp && cp.dataset.copy) { copyValue(cp); return; }
+  // 详情展开/收起(按钮触发;卡面不再展示 ID 摘要行)
+  const dtBtn = e.target.closest("[data-detail]");
+  if (dtBtn) {
+    const card = dtBtn.closest(".streamer");
+    const name = card.dataset.name;
+    if (card.classList.toggle("open")) {
+      expandedStreamers.add(name);
+      dtBtn.textContent = "收起 ▴";
+      loadShots(name, card.querySelector(".shot-grid"));
+    } else {
+      expandedStreamers.delete(name);
+      dtBtn.textContent = "详情 ▾";
+    }
+    return;
+  }
+  const pvBtn = e.target.closest("[data-preview]");
+  if (pvBtn) { openPreview(pvBtn.dataset.preview); return; }
+  const av = e.target.closest(".avatar");
+  if (av) { const s = av.closest(".streamer"); openPreview(s.dataset.name); return; }
+  const btn = e.target.closest("[data-del]");
+  if (!btn) return;
+  const name = btn.dataset.del;
+  config.monitors = (config.monitors || []).filter(m => m.name !== name);
+  saveMonitors();
+  renderStreamers();
+});
+// 卡面「自动录制」开关:change 在 checkbox 切换时触发,改完即存。只改本地
+// config 再整体提交,不触发 renderStreamers —— 重绘会让刚点的开关闪一下。
+// (备注走悬浮窗,见 openNote,不在这条链路上。)
+document.getElementById("streamer-list").addEventListener("change", e => {
+  const card = e.target.closest(".streamer");
+  if (!card) return;
+  const m = _monOf(card.dataset.name);
+  if (!m) return;
+  const cb = e.target.closest(".ar-cb");
+  if (!cb) return;
+  m.auto_record = cb.checked;
+  saveMonitors();
+  gtoast(`${card.dataset.name} · ${cb.checked ? "已开启自动录制" : "已休眠(不再自动检测/录制)"}`);
+});
+async function toggleRec(name, action, btn) {
+  if (btn.dataset.busy) return;
+  btn.dataset.busy = "1";
+  try {
+    const r = await (await fetch(`/api/streamers/${encodeURIComponent(name)}/rec-${action}`, { method: "POST" })).json();
+    if (!r.ok) { alert((action === "stop" ? "停止" : "开始") + "失败: " + (r.error || "")); return; }
+    setTimeout(loadStatus, 800);
+  } catch (e) {
+    alert("操作失败: " + e);
+  } finally {
+    setTimeout(() => { delete btn.dataset.busy; }, 900);
+  }
+}
+async function openFolder(path, action) {
+  try {
+    const r = await (await fetch("/api/open-folder", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, action: action || "open" })
+    })).json();
+    if (!r.ok) alert("打开失败: " + (r.error || ""));
+  } catch (e) {
+    alert("打开失败: " + e);
+  }
+}
+
+/* ── 路径面包屑 ──────────────────────────────────────────────
+   录制文件夹的完整路径普遍长于卡片可用宽度(约 244px),整条铺开会撑破
+   卡片。这里按 / 拆成可点胶囊:白名单根目录压成「归档根」,中间层级折
+   成「…」,只保留末尾两级 —— 日期和主播名才是肉眼要区分的部分。
+   点胶囊 = 在 Finder 打开该层级;点胶囊之间的空隙 = 旧的路径菜单。   */
+let statusRoots = [];
+// NAS 挂载点这类配置常写成 ~/DouyinArchive,展开成绝对路径只有后端知道。
+// 服务重启前 /api/status 还带不出 archive_roots,这里退而求其次:用目录名
+// 在真实路径里做连续匹配定位根目录 —— 免得为了一个标签去重启打断录制。
+function rootsFromConfig() {
+  const out = [];
+  try {
+    const c = (typeof config !== "undefined" && config) || {};
+    const nas = c.nas || {};
+    if (nas.enabled) {
+      const segs = [String(nas.mount_point || ""), String(nas.root_dir || "")]
+        .map(s => s.replace(/^~\/?/, "")).join("/").split("/").filter(Boolean);
+      if (segs.length) out.push(segs);
+    }
+    const od = String(((c.recorder || {}).output_dir) || "").replace(/^~\/?/, "");
+    out.push(od ? od.split("/").filter(Boolean) : ["recordings"]);  // 后端默认 BASE/recordings
+    const ext = String(((c.archive || {}).external_dir) || "").replace(/^~\/?/, "");
+    if (ext) out.push(ext.split("/").filter(Boolean));
+  } catch (e) {}
+  return out;
+}
+function pathChips(full) {
+  if (!full) return "";
+  const segs = String(full).split("/").filter(Boolean);
+  if (!segs.length) return "";
+  // 取最长匹配:优先后端白名单整段前缀,其次按目录名在路径中定位
+  let bn = 0;
+  for (const r of (statusRoots || [])) {
+    const rs = String(r).split("/").filter(Boolean);
+    if (rs.length > bn && rs.every((s, i) => segs[i] === s)) bn = rs.length;
+  }
+  if (!bn) {
+    for (const rs of rootsFromConfig()) {
+      for (let i = 0; i + rs.length <= segs.length; i++) {
+        if (rs.every((s, k) => segs[i + k] === s)) {
+          if (i + rs.length > bn) bn = i + rs.length;
+          break;
+        }
+      }
+    }
+  }
+  const cut = Math.max(0, segs.length - bn - 2);   // 折叠掉的中间层数
+  const at = i => "/" + segs.slice(0, i).join("/");
+  const chip = (p, t, cls) =>
+    `<span class="pm-chip${cls ? " " + cls : ""}" data-folder="${esc(p)}" ` +
+    `title="在 Finder 中打开 ${esc(p)}">${esc(t)}</span>`;
+  const out = [];
+  if (bn) out.push(chip(at(bn), "归档根", "is-root"));
+  if (cut > 0) out.push(chip(at(bn + cut), "…", "is-root"));
+  for (let i = bn + cut; i < segs.length; i++) {
+    out.push(chip(at(i + 1), segs[i], i === segs.length - 1 ? "is-last" : "is-seg"));
+  }
+  return `<span class="pm-chips" data-path-menu="${esc(full)}" title="${esc(full)}">` +
+    out.join('<span class="pm-sep">/</span>') + "</span>";
+}
+
+/* ── 路径操作弹出菜单(历史地址 / 录制文件夹) ── */
+const pm = document.getElementById("path-menu");
+let pmPath = "";
+function showPathMenu(x, y, path) {
+  if (!path) return;
+  pmPath = path;
+  pm.innerHTML = `<div class="pm-path">${esc(path)}</div>
+    <button data-pm="open">▶ 打开文件</button>
+    <button data-pm="reveal">⌕ 在 Finder 中显示</button>
+    <button data-pm="copy">⧉ 复制路径</button>`;
+  pm.classList.remove("hidden");
+  pm.style.left = "0px"; pm.style.top = "0px";   // 先复位再测宽高,避免残留偏移
+  const r = pm.getBoundingClientRect();
+  pm.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 12)) + "px";
+  pm.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 12)) + "px";
+}
+function hidePathMenu() { pm.classList.add("hidden"); }
+pm.addEventListener("click", async e => {
+  const b = e.target.closest("button[data-pm]");
+  if (!b) return;
+  const act = b.dataset.pm;
+  hidePathMenu();
+  if (act === "copy") {
+    try { await navigator.clipboard.writeText(pmPath); } catch (e) {}
+    return;
+  }
+  openFolder(pmPath, act);
+});
+// 点击菜单外任意位置关闭
+document.addEventListener("click", e => {
+  if (pm.classList.contains("hidden")) return;
+  if (!e.target.closest("#path-menu") && !e.target.closest("[data-path-menu]")) hidePathMenu();
+});
+window.addEventListener("scroll", hidePathMenu, true);
+async function refreshStreamer(name, btn) {
+  if (btn.dataset.busy) return;
+  btn.dataset.busy = "1";
+  btn.textContent = "检测中…";
+  try {
+    const r = await (await fetch(`/api/streamers/${encodeURIComponent(name)}/refresh`, { method: "POST" })).json();
+    if (!r.ok) { alert("刷新失败: " + (r.error || "")); return; }
+    setTimeout(loadStatus, 1500);  // 等后端检测完成后拉取新状态
+  } catch (e) {
+    alert("刷新失败: " + e);
+  } finally {
+    setTimeout(() => { delete btn.dataset.busy; btn.textContent = "刷新"; }, 1600);
+  }
+}
+
+/* ── 数据读写 ── */
+function renderRecorderCurrent() {
+  const r = config.recorder || {};
+  const bitrate = (r.bitrate == null || r.bitrate === "" || r.bitrate === 0)
+    ? "复制原流(不重编码)" : String(r.bitrate) + " Kbps";
+  const fmt = r.format || "flv";
+  const seg = (r.segment_time || 0) > 0 ? String(r.segment_time) + "秒/段" : "不分片";
+  const el = document.getElementById("recorder-current");
+  if (el) el.textContent = "当前生效: 码率 " + bitrate + " · 格式 " + fmt + " · " + seg;
+}
+async function loadConfig() {
+  try {
+    config = await (await fetch("/api/config")).json();
+    document.querySelectorAll("[data-path]").forEach(inp => {
+      const v = pathGet(config, inp.dataset.path);
+      // 录制设置:0/空 = 使用默认,输入框留空并显示占位提示
+      if ((inp.dataset.path === "recorder.bitrate" || inp.dataset.path === "recorder.segment_time")
+          && (v === 0 || v === "" || v == null)) {
+        inp.value = "";
+        return;
+      }
+      if (v != null) inp.value = v;
+    });
+    const bitrateInp = document.querySelector('[data-path="recorder.bitrate"]');
+    if (bitrateInp) bitrateInp.placeholder = "默认=复制原流(0)";
+    const segInp = document.querySelector('[data-path="recorder.segment_time"]');
+    if (segInp) segInp.placeholder = "默认=不分片(0)";
+    renderRecorderCurrent();
+    renderStreamers();
+  } catch (e) {}
+}
+async function loadStatus() {
+  try {
+    const s = await (await fetch("/api/status")).json();
+    liveMap = s.streamers || {};
+    recMap = s.recordings || {};
+    if (Array.isArray(s.archive_roots)) statusRoots = s.archive_roots;
+    updateStreamers();
+  } catch (e) {}
+}
+function fmtDateTime(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000);
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function fmtSize(bytes) {
+  if (bytes == null) return "—";
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+  if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB";
+  return (bytes / 1073741824).toFixed(2) + " GB";
+}
+let histPage = 0;
+let histPageSize = 20;
+let histEntries = [];                 // 方案 B:展开态需要按条目记住,展开后局部重绘
+const expandedHistory = new Set();    // 已展开的历史条目 started_at
+function renderHistory(entries) {
+  histEntries = entries || [];
+  const wrap = document.getElementById("history-list");
+  const total = (entries || []).length;
+  if (!total) {
+    wrap.innerHTML = '<div class="empty">暂无录制记录,主播开播后将自动录制并记录</div>';
+    document.getElementById("hist-info").textContent = "0/0";
+    return;
+  }
+  const pages = Math.max(1, Math.ceil(total / histPageSize));
+  if (histPage >= pages) histPage = pages - 1;
+  const slice = (entries.slice().reverse()).slice(histPage * histPageSize, (histPage + 1) * histPageSize);
+  const now = Date.now() / 1000;
+  wrap.innerHTML = slice.map(e => {
+    const recording = e.status === "recording";
+    const arch = e.archive || {};
+    const st = recording ? "recording" : (arch.state || "none");
+    const f = e.files || {};
+    const archived = st === "archived";
+    const open = expandedHistory.has(e.started_at);   // 方案 B:详情按需展开
+    const mainPath = archived ? (arch.dest || f.dir || "") : (e.output_path || "");
+    const locShort = archived ? "NAS" : (st === "missing" ? "缺失" : (st === "pending" ? "待归档" : (st === "archiving" ? "归档中" : "本机")));
+    const locLabel = archived ? "已归档到 NAS / 外接硬盘"
+      : (st === "missing" ? "文件已不存在"
+        : (st === "pending" ? "待归档,现仍在本机" : (st === "archiving" ? "归档中,现仍在本机" : "文件在本机")));
+    const BADGE = {
+      recording: '<span class="badge live">录制中</span>',
+      pending:   '<span class="badge wait">待归档</span>',
+      archiving: '<span class="badge arch">归档中</span>',
+      archived:  '<span class="badge archived">已归档 ✓</span>',
+      failed:    `<span class="badge err" title="${esc(arch.error || "归档失败")}">归档失败</span>`,
+      missing:   `<span class="badge gone" title="${esc(arch.error || "文件已不存在")}">文件缺失</span>`,
+      none:      '<span class="badge hot">已完成</span>',
+    };
+    const badge = BADGE[st] || BADGE.none;
+    const dur = recording ? fmtDur(now - e.started_at) : fmtDur(e.duration);
+    // 随行文件清单:视频 / .meta 目录 / align.json(礼物与时间戳校验数据)
+    // exists: true=在 / false=缺失(早期归档可能未含) / null=归档目标未挂载,无法确认
+    const fi = (label, p, ex) => {
+      if (!p) return "";
+      const miss = ex === false;
+      const unknown = ex === null || ex === undefined;
+      const tip = miss ? "该文件缺失(早期归档可能未包含)" : (unknown ? "归档目标未挂载,无法确认" : p + "\n点击:打开 / 复制路径");
+      return `<span class="fi"><b>${label}</b><span class="fp${miss ? " miss" : (unknown ? " unknown" : "")}" data-path-menu="${esc(p)}" title="${esc(tip)}">${esc(p)}${miss ? " ✗" : (unknown ? " ?" : "")}</span></span>`;
+    };
+    // 展开区:完整存放路径 + 随行文件清单(视频/字幕/礼物明细/时间戳)
+    const detail = open ? `<div class="h-detail">
+        <div class="drow">
+          <span class="dlabel">${archived ? "归档位置" : (st === "missing" ? "原路径" : "本机路径")}</span>
+          <span class="h-pth" data-path-menu="${esc(mainPath)}" title="${esc(locLabel)}\n点击:打开 / 复制路径">${esc(mainPath || "—")}</span>
+        </div>
+        ${(f.video || f.meta_dir) ? `<div class="h-files">
+          ${fi("视频", f.video, f.video_exists)}${fi("字幕", f.ass, f.ass_exists)}${fi("礼物明细", f.jsonl, f.jsonl_exists)}${fi("时间戳", f.align, f.align_exists)}
+        </div>` : ""}
+        ${arch.error ? `<div class="drow" style="margin-top:6px"><span class="dlabel">说明</span><span class="h-pth" style="cursor:default">${esc(arch.error)}</span></div>` : ""}
+      </div>` : "";
+    return `<div class="hist-row">
+      <div class="h-main">
+        <div class="h-name" title="${esc(e.name)}">${esc(e.name)}</div>
+        <div class="h-time">${fmtDateTime(e.started_at)} ~ ${recording ? "录制中" : fmtDateTime(e.ended_at)}</div>
+        <div class="h-dur">${dur}</div>
+        <div class="h-size">${fmtSize(e.size)}</div>
+        <div class="h-state">${badge}<span class="h-loc${archived ? " archive" : ""}" title="${esc(locLabel)}">${locShort}</span></div>
+        <div class="h-ops">
+          <button class="btn btn-ghost" data-hist-detail="${e.started_at}" title="展开路径与随行文件">详情 ${open ? "▴" : "▾"}</button>
+          <button class="btn btn-ghost" data-open="${esc(archived ? (arch.dest || "") : (e.output_path || ""))}" title="打开所在目录">打开</button>
+          <button class="btn btn-ghost" data-dm="${esc(e.output_path || "")}" title="弹幕字幕微调(偏移/重生成)">弹幕</button>
+          <button class="btn btn-ghost" data-del-s="${e.started_at}" data-del-p="${e.output_path}" title="删除该条记录">删除</button>
+        </div>
+      </div>
+      ${detail}
+    </div>`;
+  }).join("");
+  document.getElementById("hist-info").textContent = (histPage + 1) + "/" + pages;
+}
+async function loadHistory() {
+  try {
+    const d = await (await fetch("/api/history")).json();
+    renderHistory(d.entries || []);
+  } catch (e) {}
+}
+async function deleteHistory(keys, clear) {
+  try {
+    const r = await (await fetch("/api/history/delete", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(clear ? { clear: true } : { keys })
+    })).json();
+    if (!r.ok) { alert("删除失败: " + (r.error || "")); return; }
+    loadHistory();
+  } catch (e) { alert("删除失败: " + e); }
+}
+
+/* ── 弹幕字幕微调面板 ── */
+let dmPath = null;
+async function openDmPanel(path) {
+  if (!path) return;
+  dmPath = path;
+  document.getElementById("dm-modal").classList.remove("hidden");
+  document.getElementById("dm-body").innerHTML = '<div class="empty">加载中…</div>';
+  await refreshDmPanel();
+}
+async function refreshDmPanel() {
+  try {
+    const d = await (await fetch("/api/danmaku/session?path=" + encodeURIComponent(dmPath))).json();
+    renderDmPanel(d);
+  } catch (e) {
+    document.getElementById("dm-body").innerHTML = '<div class="empty">加载失败: ' + e + "</div>";
+  }
+}
+function renderDmPanel(d) {
+  const body = document.getElementById("dm-body");
+  document.getElementById("dm-sub").textContent = d.path || "";
+  if (!d.ok) {
+    body.innerHTML = '<div class="empty">' + esc(d.error || "无法读取") + "</div>";
+    return;
+  }
+  const cfgOff = d.config_offset || 0;
+  const manual = (d.global_offset != null) ? d.global_offset : cfgOff;
+  let html = "";
+  if (!d.has_events) {
+    html += '<div class="empty">本场没有弹幕明细(jsonl 不存在):录制时「弹幕/礼物录制」开关未开启。</div>';
+  } else {
+    html += `<div class="dm-global">
+      <span>本场全局偏移:</span>
+      <input type="number" step="any" id="dm-global" value="${manual}">
+      <span>秒</span>
+      <button class="btn btn-ghost" data-dm-step="-0.5">−0.5</button>
+      <button class="btn btn-ghost" data-dm-step="0.5">+0.5</button>
+      <span class="hint">配置全局默认 ${cfgOff}s;观看时可用播放器字幕延迟快捷键试出合适值再填这里</span>
+    </div>`;
+    html += d.segments.map(s => `<div class="dm-seg">
+      <span class="s-idx">#${esc(String(s.idx))}</span>
+      <span class="s-file">${esc(s.file)}${s.ass ? " · .ass ✓" : " · 无字幕"}</span>
+      <span class="s-sec">锚点 ${esc(s.anchor_str || "")} · 偏移 ${s.offset}s</span>
+      <span>分片偏移</span>
+      <input type="number" step="any" data-dm-seg="${esc(String(s.idx))}" value="${s.extra || 0}">
+      <span>秒</span>
+    </div>`).join("");
+    const sum = d.summary;
+    if (sum) {
+      const top = (sum.gift_top || []).slice(0, 5)
+        .map(g => esc(g.gift) + "×" + g.count).join("、");
+      html += `<div class="dm-sum">
+        弹幕 <b>${sum.chat}</b> 条 · 礼物 <b>${sum.gift}</b> 次 · 消费 <b>${sum.diamonds}</b> 抖币
+        ${top ? "<br>礼物榜: " + top : ""}
+      </div>`;
+    }
+    const gaps = (d.gaps || []).filter(g => g.note);
+    if (gaps.length) {
+      html += '<div class="dm-gaps">⚠ 对齐异常记录:<br>' +
+        gaps.map(g => "· " + esc(g.note)).join("<br>") + "</div>";
+    }
+    html += '<div style="margin-top:12px;display:flex;gap:8px;">' +
+      '<button class="btn" id="dm-apply">应用并重新生成字幕</button>' +
+      '<button class="btn btn-ghost" id="dm-reset">清除本场偏移(回到配置默认)</button></div>';
+  }
+  body.innerHTML = html;
+  body.querySelectorAll("[data-dm-step]").forEach(b => b.addEventListener("click", () => {
+    const inp = document.getElementById("dm-global");
+    if (inp) inp.value = (Number(inp.value) || 0) + Number(b.dataset.dmStep);
+  }));
+  const apply = document.getElementById("dm-apply");
+  if (apply) apply.addEventListener("click", applyDmOffsets);
+  const reset = document.getElementById("dm-reset");
+  if (reset) reset.addEventListener("click", async () => {
+    if (!confirm("清除本场全部人工偏移,回到配置全局默认?")) return;
+    await applyDmOffsets({ reset: true });
+  });
+}
+async function applyDmOffsets(opts) {
+  const body = { path: dmPath };
+  if (!(opts && opts.reset)) {
+    const g = document.getElementById("dm-global");
+    if (g) {
+      const v = Number(g.value);
+      if (Number.isNaN(v)) { alert("全局偏移必须是数字"); return; }
+      body.global_offset = v;
+    }
+    const per = {};
+    document.querySelectorAll("[data-dm-seg]").forEach(inp => {
+      const v = Number(inp.value);
+      if (!Number.isNaN(v)) per[inp.dataset.dmSeg] = v;
+    });
+    body.per_segment = per;
+  } else {
+    body.global_offset = null;
+    body.per_segment = {};
+  }
+  try {
+    const r = await (await fetch("/api/danmaku/offset", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    })).json();
+    if (!r.ok) { alert("应用失败: " + (r.error || "")); return; }
+    renderDmPanel(r);
+  } catch (e) { alert("应用失败: " + e); }
+}
+document.getElementById("dm-close").addEventListener("click", () =>
+  document.getElementById("dm-modal").classList.add("hidden"));
+document.getElementById("dm-modal").addEventListener("click", e => {
+  if (e.target.id === "dm-modal") e.target.classList.add("hidden");
+});
+document.getElementById("history-list").addEventListener("click", e => {
+  // 地址栏点击:弹出 打开文件 / Finder 显示 / 复制路径 菜单
+  const pmEl = e.target.closest("[data-path-menu]");
+  if (pmEl) { showPathMenu(e.clientX, e.clientY, pmEl.dataset.pathMenu); return; }
+  const dmEl = e.target.closest("[data-dm]");
+  if (dmEl) { openDmPanel(dmEl.dataset.dm); return; }
+  // 历史条目详情展开/收起(方案 B:路径与随行文件按需展示)
+  const hdBtn = e.target.closest("[data-hist-detail]");
+  if (hdBtn) {
+    const key = Number(hdBtn.dataset.histDetail);
+    if (expandedHistory.has(key)) expandedHistory.delete(key);
+    else expandedHistory.add(key);
+    renderHistory(histEntries);   // 用缓存数据重绘,保持展开状态
+    return;
+  }
+  const openEl = e.target.closest("[data-open]");
+  if (openEl) { openFolder(openEl.dataset.open); return; }
+  const delEl = e.target.closest("[data-del-s]");
+  if (delEl) {
+    if (!confirm("确定删除该条录制记录?")) return;
+    deleteHistory([{ started_at: Number(delEl.dataset.delS), output_path: delEl.dataset.delP }], false);
+  }
+});
+document.getElementById("hist-size").addEventListener("change", e => {
+  histPageSize = Number(e.target.value);
+  histPage = 0;
+  loadHistory();
+});
+document.getElementById("hist-prev").addEventListener("click", () => {
+  if (histPage > 0) { histPage--; loadHistory(); }
+});
+document.getElementById("hist-next").addEventListener("click", () => {
+  histPage++; loadHistory();  // renderHistory 内部会夹紧到最大页
+});
+document.getElementById("hist-del-page").addEventListener("click", async () => {
+  const entries = (await (await fetch("/api/history")).json()).entries || [];
+  const pages = Math.max(1, Math.ceil(entries.length / histPageSize));
+  const cur = histPage >= pages ? pages - 1 : histPage;
+  const slice = (entries.slice().reverse()).slice(cur * histPageSize, (cur + 1) * histPageSize);
+  if (!slice.length) { alert("当前页无记录"); return; }
+  if (!confirm("确定删除当前页 " + slice.length + " 条记录?")) return;
+  deleteHistory(slice.map(e => ({ started_at: e.started_at, output_path: e.output_path })), false);
+});
+document.getElementById("hist-clear").addEventListener("click", () => {
+  if (!confirm("确定清空全部录制历史?此操作不可恢复!")) return;
+  deleteHistory([], true);
+});
+function collectFields() {
+  const patch = {};
+  let bad = null;
+  document.querySelectorAll("[data-path]").forEach(inp => {
+    if (inp.dataset.bool) { pathSet(patch, inp.dataset.path, inp.value === "true"); return; }
+    let v = inp.value;
+    if (inp.type === "number") {
+      // 浏览器会把 number 框里的非法内容(如「30分钟」「1800s」)静默丢弃为空串,
+      // 若不拦截会被当成 0 保存,造成「保存成功但值没变」的假象
+      if (inp.validity && inp.validity.badInput && !bad) bad = inp;
+      v = v === "" ? 0 : Number(v);      // 空串→0(后端兼容),避免 NaN
+      if (Number.isNaN(v)) v = inp.value; // 非数字保留原文,不静默变 null
+    }
+    pathSet(patch, inp.dataset.path, v);
+  });
+  if (bad) {
+    const label = (bad.closest(".field")?.querySelector("label")?.textContent) || bad.dataset.path;
+    throw new Error("「" + label + "」的内容不是纯数字(不能带\"分钟\"等单位),请只填数字(如 1800)");
+  }
+  return patch;
+}
+/* ── 轻量复制反馈 ──
+   卡面抖音号胶囊点一下就复制:胶囊自身变绿打勾(1.4s 复原)+ 顶部吐司提示。
+   两处反馈都给,避免用户怀疑到底复制成功没有。 */
+let _gtoastTimer = 0;
+function gtoast(msg, isErr) {
+  const t = document.getElementById("gtoast");
+  if (!t) return;
+  t.textContent = msg;
+  t.className = "show" + (isErr ? " err" : "");
+  clearTimeout(_gtoastTimer);
+  _gtoastTimer = setTimeout(() => { t.className = ""; }, 1800);
+}
+function _legacyCopy(text) {
+  // 通过局域网 IP 访问时不是安全上下文,navigator.clipboard 不可用,
+  // 退回 execCommand 兜底,至少保证复制不静默失败。
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  ta.remove();
+  return ok;
+}
+function copyValue(el, label) {
+  const val = el.dataset.copy || "";
+  const finish = ok => {
+    if (!ok) { gtoast("复制失败,请手动选中复制", true); return; }
+    gtoast("已复制 " + (label || (val.length > 26 ? val.slice(0, 26) + "…" : val)));
+    // 认 .dy-ic 图标而不是某个具体类名:抖音号胶囊、快捷指令里的命令格
+    // 都是「带图标的胶囊」,点了变绿对勾再复原;纯文本元素则短暂换成「已复制」。
+    const ic = el.querySelector(".dy-ic");
+    if (!ic) {
+      const old = el.textContent;
+      el.textContent = "已复制";
+      setTimeout(() => { if (el.isConnected) el.textContent = old; }, 1200);
+      return;
+    }
+    el.classList.add("copied");
+    ic.textContent = "✓";
+    setTimeout(() => {
+      if (!el.isConnected) return;
+      el.classList.remove("copied");
+      ic.textContent = "⧉";
+    }, 1400);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(val).then(() => finish(true), () => finish(_legacyCopy(val)));
+  } else {
+    finish(_legacyCopy(val));
+  }
+}
+function toast(id, ok, msg, okMsg) {
+  const t = document.getElementById(id);
+  t.textContent = ok ? (okMsg || "已保存并应用 ✓") : "保存失败: " + msg;
+  t.className = "toast show" + (ok ? "" : " err");
+  setTimeout(() => t.className = "toast", 2600);
+}
+async function saveParams(id, okMsg) {
+  let patch;
+  try {
+    patch = collectFields();   // 非法数字输入会在此抛错(带字段名)
+  } catch (e) {
+    toast(id, false, e.message);
+    return;
+  }
+  try {
+    const r = await fetch("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+    const j = await r.json();
+    toast(id, j.ok, j.error || "", okMsg);
+    if (j.ok) loadConfig();
+  } catch (e) { toast(id, false, String(e)); }
+}
+async function saveMonitors() {
+  try {
+    await fetch("/api/config", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ monitors: config.monitors }) });
+  } catch (e) {}
+}
+document.getElementById("save-common").addEventListener("click", () => saveParams("toast-common"));
+document.getElementById("save-advanced").addEventListener("click", () => saveParams("toast-advanced", "已保存 ✓ 新参数在下次开始录制时生效"));
+document.getElementById("save-preview").addEventListener("click", () => saveParams("toast-preview"));
+
+/* ── 启动自检横幅(默认展开,可折叠;折叠状态在定时刷新间保持) ── */
+let preflightCollapsed = false;
+function loadPreflight() {
+  fetch("/api/preflight").then(r => r.json()).then(items => {
+    if (!Array.isArray(items)) return;
+    const warn = items.filter(i => i.status !== "ok");
+    const banner = document.getElementById("setup-banner");
+    if (!warn.length) { banner.classList.add("hidden"); return; }
+    banner.classList.remove("hidden");
+    banner.classList.toggle("fail", warn.some(i => i.status === "fail"));
+    banner.classList.toggle("collapsed", preflightCollapsed);
+    const sorted = warn.slice().sort((a, b) =>
+      (a.status === "fail" ? -1 : 0) - (b.status === "fail" ? -1 : 0));
+    banner.innerHTML =
+      '<div class="banner-head"><div class="card-title">启动自检 · ' + warn.length + ' 项需注意</div>' +
+      '<button class="btn btn-ghost" id="pf-toggle" title="折叠/展开自检详情">' +
+      (preflightCollapsed ? "展开 ▾" : "收起 ▴") + '</button></div>' +
+      '<div class="banner-items">' + sorted.map(i =>
+        '<div class="banner-item" data-id="' + i.id + '">' +
+          '<span class="bdot ' + i.status + '"></span>' +
+          '<div class="banner-body"><b>' + i.title + '</b> ' + i.detail +
+            (i.action ? '<span class="banner-action">' + i.action + '</span>' : '') +
+          '</div></div>'
+      ).join("") + '</div>';
+    document.getElementById("pf-toggle").addEventListener("click", () => {
+      preflightCollapsed = !preflightCollapsed;
+      banner.classList.toggle("collapsed", preflightCollapsed);
+      const t = document.getElementById("pf-toggle");
+      if (t) t.textContent = preflightCollapsed ? "展开 ▾" : "收起 ▴";
+    });
+    // cookie 项点击跳转高级参数,nas/archive 项跳转归档设置页
+    banner.querySelectorAll('.banner-item[data-id="cookie"]').forEach(el =>
+      el.addEventListener("click", () => showView("advanced")));
+    banner.querySelectorAll('.banner-item[data-id="nas"], .banner-item[data-id="archive"]').forEach(el =>
+      el.addEventListener("click", () => showView("nas")));
+  }).catch(() => {});
+}
+
+/* ── NAS 归档 ── */
+function applyNasStatus(d) {
+  document.getElementById("nas-mounted").textContent = d.mounted ? "已挂载" : "未挂载";
+  document.getElementById("nas-depth").textContent = d.queue_depth != null ? d.queue_depth : "—";
+  document.getElementById("nas-failed").textContent = d.failed != null ? d.failed : "—";
+  document.getElementById("nas-last").textContent = d.last_archive ? fmtTs(d.last_archive) : "—";
+}
+// 只刷新状态卡,不碰表单(避免覆盖用户正在输入的内容)
+function loadNasStatus() {
+  fetch("/api/nas").then(r => r.json()).then(applyNasStatus).catch(() => {});
+}
+// 填充表单(仅初始化时 + 保存成功后调用一次)
+function loadNasForm() {
+  fetch("/api/nas").then(r => r.json()).then(d => {
+    const c = d.config || {};
+    const a = d.archive || {};
+    document.getElementById("archive-mode").value = a.mode || "auto";
+    document.getElementById("archive-ext").value = a.external_dir || "";
+    document.getElementById("nas-protocol").value = c.protocol || "smb";
+    document.getElementById("nas-host").value = c.host || "";
+    document.getElementById("nas-port").value = c.port || 445;
+    shareSelectSet(c.share || "");
+    document.getElementById("nas-username").value = c.username || "";
+    document.getElementById("nas-password").value = c.password || "";
+    document.getElementById("nas-mount").value = c.mount_point || "/Volumes/douyin-archive";
+    document.getElementById("nas-root").value = c.root_dir || "录播";
+    toggleArchiveMode();
+    applyNasStatus(d);
+  }).catch(() => {});
+}
+// 根据归档模式联动禁用无关字段(仅外接硬盘时禁用 NAS 连接字段,反之禁用外接目录)
+function toggleArchiveMode() {
+  const mode = document.getElementById("archive-mode").value;
+  const isExternal = mode === "external";
+  ["nas-host", "nas-port", "nas-share", "nas-username", "nas-password", "nas-mount", "nas-detect"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = isExternal;
+  });
+  const ext = document.getElementById("archive-ext");
+  if (ext) ext.disabled = mode === "nas";
+}
+function fmtTs(ts) {
+  if (!ts) return "—";
+  const dt = new Date(ts * 1000);
+  return dt.toLocaleString();
+}
+function nasCollect() {
+  return {
+    mode: document.getElementById("archive-mode").value,
+    external_dir: document.getElementById("archive-ext").value.trim(),
+    protocol: document.getElementById("nas-protocol").value,
+    host: document.getElementById("nas-host").value.trim(),
+    port: Number(document.getElementById("nas-port").value),
+    share: document.getElementById("nas-share").value.trim(),
+    username: document.getElementById("nas-username").value.trim(),
+    password: document.getElementById("nas-password").value,
+    mount_point: document.getElementById("nas-mount").value.trim(),
+    root_dir: document.getElementById("nas-root").value.trim(),
+    enabled: true,
+  };
+}
+/* ── 共享名检测下拉 ── */
+function shareSelectSet(name) {
+  const sel = document.getElementById("nas-share");
+  if (!name) { sel.value = ""; return; }
+  if (![...sel.options].some(o => o.value === name)) {
+    const o = document.createElement("option");
+    o.value = name; o.textContent = name;
+    sel.appendChild(o);
+  }
+  sel.value = name;
+}
+async function detectShares() {
+  const btn = document.getElementById("nas-detect");
+  const t = document.getElementById("toast-nas");
+  btn.disabled = true; btn.textContent = "检测中…";
+  try {
+    const r = await fetch("/api/nas/shares", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(nasCollect()) });
+    const j = await r.json();
+    const sel = document.getElementById("nas-share");
+    if (j.ok && Array.isArray(j.shares) && j.shares.length) {
+      sel.innerHTML = '<option value="">请选择共享…</option>';
+      j.shares.forEach(s => { const o = document.createElement("option"); o.value = s; o.textContent = s; sel.appendChild(o); });
+      t.textContent = "检测到 " + j.shares.length + " 个共享,请选择"; t.className = "toast show";
+    } else {
+      sel.innerHTML = '<option value="">点击「检测共享」加载</option>';
+      t.textContent = "检测失败: " + (j.error || "未发现共享"); t.className = "toast show err";
+    }
+  } catch (e) { t.textContent = "检测失败: " + e; t.className = "toast show err"; }
+  setTimeout(() => t.className = "toast", 3000);
+  btn.disabled = false; btn.textContent = "检测共享";
+}
+async function nasTest() {
+  const t = document.getElementById("toast-nas");
+  t.textContent = "测试中…"; t.className = "toast show";
+  try {
+    const r = await fetch("/api/nas/test", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(nasCollect()) });
+    const j = await r.json();
+    t.textContent = j.ok ? ("连接成功,延迟 " + j.latency_ms + "ms") : ("连接失败: " + (j.error || ""));
+    t.className = "toast show" + (j.ok ? "" : " err");
+  } catch (e) { t.textContent = "连接失败: " + e; t.className = "toast show err"; }
+  setTimeout(() => t.className = "toast", 3000);
+}
+async function nasSave() {
+  const t = document.getElementById("toast-nas");
+  try {
+    const r = await fetch("/api/nas", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(nasCollect()) });
+    const j = await r.json();
+    t.textContent = j.ok ? "已保存并启用 ✓" : ("保存失败: " + (j.error || ""));
+    t.className = "toast show" + (j.ok ? "" : " err");
+    if (j.ok) loadNasForm();
+  } catch (e) { t.textContent = "保存失败: " + e; t.className = "toast show err"; }
+  setTimeout(() => t.className = "toast", 3000);
+}
+document.getElementById("nas-test").addEventListener("click", nasTest);
+document.getElementById("nas-save").addEventListener("click", nasSave);
+document.getElementById("nas-detect").addEventListener("click", detectShares);
+document.getElementById("archive-mode").addEventListener("change", toggleArchiveMode);
+// 主机/用户名填好后,离开密码框自动检测共享
+document.getElementById("nas-password").addEventListener("blur", () => {
+  if (document.getElementById("nas-host").value.trim() &&
+      document.getElementById("nas-username").value.trim()) detectShares();
+});
+
+/* ── 备注悬浮窗 ──
+   主播卡上只放一个「备注」按钮:卡面宽度就那么点,把备注文字铺上去会把同行
+   卡片撑得高低不齐,也不好读。要看/要改就弹这个窗,改完立即落盘。 */
+let noteName = "";
+function openNote(name) {
+  const m = _monOf(name);
+  if (!m) return;
+  noteName = name;
+  document.getElementById("note-title").textContent = name + " · 备注";
+  const ta = document.getElementById("note-text");
+  ta.value = m.note || "";
+  syncNoteCount();
+  document.getElementById("note-modal").classList.remove("hidden");
+  setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 30);
+}
+function closeNote() {
+  document.getElementById("note-modal").classList.add("hidden");
+  noteName = "";
+}
+function syncNoteCount() {
+  const ta = document.getElementById("note-text");
+  document.getElementById("note-count").textContent = `${ta.value.length}/200`;
+}
+function saveNote() {
+  const m = _monOf(noteName);
+  if (!m) { closeNote(); return; }
+  m.note = document.getElementById("note-text").value.trim();
+  saveMonitors();
+  // 卡面按钮的绿点记号要跟着变,这里就地改,不整列表重绘(重绘会让卡片闪)
+  const btn = document.querySelector(`.s-note-btn[data-note="${CSS.escape(noteName)}"]`);
+  if (btn) {
+    const has = !!m.note;
+    btn.classList.toggle("has", has);
+    btn.title = has ? "备注(点击查看/编辑)" : "添加备注";
+  }
+  gtoast(m.note ? "备注已保存" : "备注已清空");
+  closeNote();
+}
+document.getElementById("note-close").addEventListener("click", closeNote);
+document.querySelector("#note-modal .modal-mask").addEventListener("click", closeNote);
+document.getElementById("note-save").addEventListener("click", saveNote);
+document.getElementById("note-clear").addEventListener("click", () => {
+  document.getElementById("note-text").value = "";
+  syncNoteCount();
+  document.getElementById("note-text").focus();
+});
+document.getElementById("note-text").addEventListener("input", syncNoteCount);
+// 悬浮窗内 Ctrl/⌘+Enter 直接保存;Esc 关闭(与系统弹窗习惯一致)
+document.getElementById("note-text").addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); saveNote(); }
+});
+document.getElementById("note-modal").addEventListener("keydown", e => {
+  if (e.key === "Escape") closeNote();
+});
+
+/* ── 预览图管理 ── */
+let pvName = "";
+function openPreview(name) {
+  pvName = name;
+  document.getElementById("pv-title").textContent = name + " · 预览图";
+  document.getElementById("pv-hint").textContent = "";
+  document.getElementById("preview-modal").classList.remove("hidden");
+  loadPreviews();
+}
+function closePreview() {
+  document.getElementById("preview-modal").classList.add("hidden");
+}
+async function loadPreviews() {
+  try {
+    const r = await (await fetch("/api/previews/" + encodeURIComponent(pvName))).json();
+    const grid = document.getElementById("pv-grid");
+    grid.innerHTML = "";
+    if (!r.images || !r.images.length) {
+      grid.innerHTML = '<div class="empty">暂无图片,开播后自动截图,或点「上传图片」手动上传</div>';
+      return;
+    }
+    r.images.forEach(fn => {
+      const isSel = fn === r.selected;
+      const card = document.createElement("div");
+      card.className = "pv-item" + (isSel ? " sel" : "");
+      card.innerHTML = `<img src="/previews/${encodeURIComponent(pvName)}/${encodeURIComponent(fn)}" alt="${fn}">
+        <div class="pv-actions">
+          <button class="btn btn-primary" data-act="select" data-file="${fn}" ${isSel ? "disabled" : ""}>${isSel ? "当前预览" : "设为预览"}</button>
+          <button class="btn btn-ghost" data-act="del" data-file="${fn}">删除</button>
+        </div>`;
+      grid.appendChild(card);
+    });
+  } catch (e) {}
+}
+document.getElementById("pv-close").addEventListener("click", closePreview);
+document.querySelector(".modal-mask").addEventListener("click", closePreview);
+document.getElementById("pv-grid").addEventListener("click", async e => {
+  const btn = e.target.closest("[data-act]");
+  if (!btn) return;
+  const act = btn.dataset.act, file = btn.dataset.file;
+  if (act === "select") {
+    const r = await (await fetch("/api/previews/" + encodeURIComponent(pvName) + "/select", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ file })
+    })).json();
+    if (!r.ok) { alert("设置失败: " + (r.error || "")); return; }
+    loadPreviews(); loadConfig();
+  } else if (act === "del") {
+    const r = await (await fetch("/api/previews/" + encodeURIComponent(pvName) + "/delete", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ file })
+    })).json();
+    if (!r.ok) { alert("删除失败: " + (r.error || "")); return; }
+    loadPreviews(); loadConfig();
+  }
+});
+document.getElementById("pv-file").addEventListener("change", e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) { alert("图片过大(限 5MB)"); e.target.value = ""; return; }
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const data = String(reader.result).split(",")[1] || String(reader.result);
+    const r = await (await fetch("/api/previews/" + encodeURIComponent(pvName) + "/upload", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data })
+    })).json();
+    if (!r.ok) { alert("上传失败: " + (r.error || "")); return; }
+    loadPreviews();
+  };
+  reader.readAsDataURL(file);
+  e.target.value = "";
+});
+
+/* ── 服务控制(launchd 启 / 停 / 重启) ──────────────────
+   重启与关闭都会杀掉提供本界面的进程,所以后端是「先返回响应、再由脱离进程
+   延迟执行」。这里的轮询就是配合那个延迟:服务会先消失,再出现。 */
+let svcBusy = false;
+
+function fmtUptime(sec) {
+  if (sec == null) return null;
+  const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+  if (d > 0) return `已运行 ${d} 天 ${h} 小时`;
+  if (h > 0) return `已运行 ${h} 小时 ${m} 分`;
+  return `已运行 ${m} 分钟`;
+}
+
+function setSvc(state, text, meta) {
+  document.getElementById("svc-dot").className = "svc-dot " + (state === "on" ? "on" : "off");
+  document.getElementById("svc-text").textContent = text;
+  document.getElementById("svc-meta").innerHTML =
+    meta || "参数保存后即时生效<br>状态每 3 秒刷新";
+}
+
+async function loadService() {
+  if (svcBusy) return;
+  let s;
+  try {
+    s = await (await fetch("/api/service")).json();
+  } catch (e) {
+    setSvc("off", "服务无响应", "可能正在重启,稍候自动重试…");
+    return;
+  }
+  const up = fmtUptime(s.uptime);
+  if (s.running) {
+    // source=manual:进程活着但 launchd 没注册(迁移/重装后常见),照常算运行中,
+    // 只是补一句提示,免得用户以为重启后服务又掉了。
+    const manual = s.source === "manual";
+    // managed + manual:launchd 注册过了,但当前这个实例是手动/一键启动拉起的,
+    // launchd 自己那份没跑 —— 业务正常,但开机不会自启、崩了也不会被拉回。
+    const hint = manual
+      ? (s.managed ? "launchd 已注册,但当前实例是手动启动的,点「重启」交给它接管"
+                   : "未注册到 launchd,开机不会自启")
+      : null;
+    setSvc("on", manual ? "服务运行中(未托管)" : "服务运行中",
+           [s.pid ? `PID ${s.pid}` : null, up, hint].filter(Boolean).join(" · "));
+  } else if (s.managed) {
+    setSvc("off", "已装载但未运行", "launchd 已接管,点「启动」拉起");
+  } else {
+    setSvc("off", "服务已停止", "未装载到 launchd,点「启动」恢复");
+  }
+  // 运行中显示「重启/关闭」,停止时只显示「启动」
+  document.getElementById("svc-start").classList.toggle("hidden", s.running);
+  document.getElementById("svc-stop").classList.toggle("hidden", !s.running);
+  document.getElementById("svc-restart").classList.toggle("hidden", !s.running);
+}
+
+async function svcControl(action) {
+  if (svcBusy) return;
+  const n = Object.keys(recMap || {}).length;
+  const label = { restart: "重启", stop: "关闭", start: "启动" }[action] || action;
+  let msg;
+  if (action === "restart") {
+    msg = n ? `当前有 ${n} 路正在录制,重启会中断录制。\n\n确定${label}服务吗?`
+            : `确定${label}服务吗?(数秒内恢复)`;
+  } else if (action === "stop") {
+    msg = n ? `当前有 ${n} 路正在录制,关闭将中断所有录制并停止监测。\n\n确定${label}服务吗?`
+            : `确定${label}服务吗?关闭后需点「启动」恢复。`;
+  } else {
+    msg = `确定${label}服务吗?`;
+  }
+  if (!confirm(msg)) return;
+
+  svcBusy = true;
+  const btns = document.querySelectorAll(".svc-btns .btn");
+  btns.forEach(b => b.disabled = true);
+  setSvc("off", `正在${label}…`, "请稍候,完成后页面会自动刷新");
+
+  try {
+    await fetch("/api/service/control", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+  } catch (e) { /* 服务可能在响应写出前就退出了,属预期 */ }
+
+  // 轮询等待:stop 等到进程消失,restart/start 等到重新可访问。
+  // 重启可能要先结束占用端口的旧实例(等 3 秒收尾)再让 launchd 拉起,
+  // 30 秒偏紧,放宽到 60 秒免得误报超时。
+  const deadline = Date.now() + 60000;
+  let done = false;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 1500));
+    let s = null;
+    try { s = await (await fetch("/api/service")).json(); } catch (e) { continue; }
+    if (action === "stop" ? !s.running : s.running) { done = true; break; }
+  }
+
+  if (!done) {
+    svcBusy = false;
+    btns.forEach(b => b.disabled = false);
+    setSvc("off", `${label}超时`, "未观察到预期状态,请查看 logs 下的日志");
+    return;
+  }
+  if (action === "stop") {
+    svcBusy = false;
+    btns.forEach(b => b.disabled = false);
+    loadService();
+  } else {
+    location.reload();   // 重启/启动后重载,确保拿到最新代码与状态
+  }
+}
+
+document.getElementById("svc-restart").addEventListener("click", () => svcControl("restart"));
+document.getElementById("svc-stop").addEventListener("click", () => svcControl("stop"));
+document.getElementById("svc-start").addEventListener("click", () => svcControl("start"));
+
+/* ── 初始化 ── */
+renderFields(COMMON_FIELDS, "grid-common");
+renderFields(ADVANCED_FIELDS, "grid-advanced");
+renderTextFields(ADVANCED_TEXT, "grid-advanced");
+renderFields(RECORDER_FIELDS, "grid-recorder");
+renderFields(PREVIEW_FIELDS, "grid-preview");
+// 先拉一次状态再渲染列表:卡片顺序依赖 liveMap(最近开播时间),
+// 否则首屏只能按配置顺序铺开、等状态回来再跳一次,看着像"排序没生效"。
+(async () => {
+  await loadStatus();
+  loadConfig();
+})();
+loadPreflight();
+loadNasForm();
+loadHistory();
+loadAuth();
+loadService();
+setInterval(loadStatus, 3000);
+setInterval(loadPreflight, 3000);
+setInterval(loadNasStatus, 3000);
+setInterval(loadHistory, 5000);
+setInterval(loadAuth, 5000);
+setInterval(loadService, 5000);
+
+/* ── 抖音登录(仅开播检测通道) ── */
+async function loadAuth() {
+  const box = document.getElementById("auth-box");
+  if (!box) return;
+  try {
+    renderAuth(await (await fetch("/api/auth")).json());
+  } catch (e) {
+    box.innerHTML = '<div class="a-sub">登录模块不可用</div>';
+  }
+}
+function fmtAgo(ts) {
+  if (!ts) return "从未";
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 60) return "刚刚";
+  if (s < 3600) return Math.floor(s / 60) + " 分钟前";
+  if (s < 86400) return Math.floor(s / 3600) + " 小时前";
+  return Math.floor(s / 86400) + " 天前";
+}
+function renderAuth(a) {
+  const box = document.getElementById("auth-box");
+  if (!box) return;
+  if (!a || a.ok === false) {
+    box.innerHTML = '<div class="a-info"><span class="a-dot err"></span><div>' +
+      '<div class="a-name">登录模块不可用</div><div class="a-sub">' +
+      esc((a && a.error) || "请确认 playwright 已安装") + '</div></div></div>';
+    return;
+  }
+  let dot = "", title = "", sub = "", ops = "";
+  if (a.logging_in) {
+    dot = "warn";
+    const bn = a.browser || a.browser_name || "";
+    const lp = a.login_phase || "";
+    if (lp === "captcha") {
+      title = "等待滑块验证";
+      sub = "抖音对新环境要求先完成滑块验证。" +
+            "请在弹出的浏览器里手动滑过验证块,完成后这里会自动继续。" +
+            (bn ? "（浏览器:" + bn + "）" : "");
+    } else if (a.manual_required) {
+      title = "请手动粘贴 Cookie";
+      sub = "浏览器已打开,但无法自动读取登录态。扫码完成后,在页面地址栏前的锁图标 → "
+          + "Cookie,或按 F12 → Application/存储 → Cookies → https://www.douyin.com,"
+          + "复制完整的 Cookie 请求头值粘贴到下方。";
+    } else {
+      title = "等待扫码…";
+      sub = (bn ? "已在 " + bn + " 中打开登录页" : "已打开登录页")
+          + "。若二维码未出现,请手动点击页面右上角「登录」按钮。"
+          + "窗口不会自动关闭,扫码成功后这里会自动更新。";
+    }
+    ops = '<button class="btn btn-ghost" data-auth="cancel">取消</button>';
+  } else if (a.state === "ok") {
+    dot = "on"; title = a.nickname || "已登录";
+    sub = "上次校验 " + fmtAgo(a.last_check || a.last_ok) +
+          " · 约每 " + (a.check_interval_hours || 12) + " 小时自动复查";
+    ops = '<button class="btn btn-ghost" data-auth="verify">立即校验</button>' +
+          '<button class="btn btn-ghost" data-auth="login">重新扫码</button>' +
+          '<button class="btn btn-ghost" data-auth="logout">退出登录</button>';
+  } else if (a.state === "expired") {
+    dot = "err"; title = "登录态已失效";
+    sub = (a.error || "校验未通过") + " · 检测已自动降级为纯 302,录制不受影响";
+    ops = '<button class="btn" data-auth="login">重新扫码</button>';
+  } else {
+    dot = ""; title = "未登录";
+    sub = "不影响录制;仅开播检测的 API 确认通道会退化为 302 探测";
+    ops = '<button class="btn" data-auth="login">扫码登录</button>';
+  }
+  // Cookie 用量:真实账号的登录态是消耗品,用一次少一次,必须让用户看得见
+  let guard = "";
+  const g = a.cookie_guard;
+  if (g && g.enabled) {
+    const pct = g.daily_quota ? Math.round(g.used_today / g.daily_quota * 100) : 0;
+    const rejects = Object.entries(g.by_reason || {})
+      .sort((x, y) => y[1] - x[1]).slice(0, 2)
+      .map(([k, v]) => ({ not_hotspot: "非热点", global_interval: "间隔未到",
+                          streamer_interval: "单主播限流", hourly_quota: "小时配额",
+                          daily_quota: "日配额", no_cookie: "无 Cookie",
+                          disabled: "未启用" }[k] || k) + ` ${v}`)
+      .join(" · ");
+    guard = '<div class="a-guard"><div class="a-guard-row">' +
+      '<span>今日 Cookie 用量</span><b>' + g.used_today + " / " + g.daily_quota + "</b></div>" +
+      '<div class="a-bar"><i style="width:' + Math.min(100, pct) + '%"></i></div>' +
+      '<div class="a-guard-sub">近 1 小时 ' + g.used_last_hour + " / " + g.hourly_quota +
+      " · 累计放行 " + g.allowed + " 次" +
+      (rejects ? " · 拦回:" + esc(rejects) : "") + "</div>" +
+      '<div class="a-guard-sub">' +
+      (g.hotspot_only ? "仅热点时段调用;矛盾校验与 302 出错时豁免" : "不限热点时段") +
+      "</div></div>";
+  }
+
+  // 未检测到可用浏览器时,提醒用户(不影响录制,只是检测通道退化)
+  if (!a.logging_in && a.state === "none" && a.browser_name === "未检测到 Chrome") {
+    sub += " · 未检测到 Chrome,将回退系统默认浏览器(需手动粘贴 Cookie)";
+  }
+
+  // 手动粘贴兜底:浏览器已打开但读不到 Cookie 时走这条路。
+  // 已登录成功(a.state === "ok")时不再挂出来 —— manual_required 是进程内
+  // 残留状态,服务没重启前它不会自动清。
+  let manual = "";
+  if (a.manual_required && a.state !== "ok") {
+    manual = '<div class="auth-manual">' +
+      '<div class="am-hint">' + esc(sub) + '</div>' +
+      '<textarea id="am-cookie" placeholder="sessionid=xxx; sessionid_ss=xxx; ..."></textarea>' +
+      '<div class="am-ops">' +
+        '<button class="btn" data-auth="manual-save">保存 Cookie</button>' +
+        '<button class="btn btn-ghost" data-auth="cancel">取消</button>' +
+      '</div></div>';
+    sub = "";
+  }
+
+  box.innerHTML = '<div class="a-info"><span class="a-dot ' + dot + '"></span><div>' +
+    '<div class="a-name">' + esc(title) + '</div>' +
+    '<div class="a-sub">' + esc(sub) + '</div></div></div>' +
+    (ops ? '<div class="a-ops">' + ops + '</div>' : "") + manual + guard;
+}
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-auth]");
+  if (!b) return;
+  const act = b.dataset.auth;
+  const post = (u, payload) => fetch(u, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}) });
+  if (act === "login") {
+    await post("/api/auth/login");
+  } else if (act === "cancel") {
+    await post("/api/auth/cancel");
+  } else if (act === "manual-save") {
+    const ta = document.getElementById("am-cookie");
+    const v = (ta && ta.value || "").trim();
+    if (!v) { alert("请先粘贴 Cookie"); return; }
+    const r = await (await post("/api/auth/manual", { cookie: v })).json();
+    if (!r.ok) { alert("保存失败:" + (r.error || "未知错误")); return; }
+  } else if (act === "logout") {
+    if (!confirm("退出后开播检测将退化为纯 302 模式。确定退出?")) return;
+    await post("/api/auth/logout");
+  } else if (act === "verify") {
+    await post("/api/auth/verify");
+  }
+  loadAuth();
+});
+</script>
+<div id="gtoast" role="status" aria-live="polite"></div>
+</body>
+</html>

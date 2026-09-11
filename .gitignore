@@ -1,0 +1,44 @@
+# ============================================================
+# 本仓库为公开仓库，以下内容一律不入库。
+# 分类：① 凭据与登录态 ② 真实主播配置 ③ 媒体与录制品 ④ 日志 ⑤ 环境缓存
+# ============================================================
+
+# ---------- ① 凭据与登录态（泄露 = 账号失窃） ----------
+auth/
+
+# ---------- ② 真实配置与运行态数据（含真实 sec_uid / 内网地址） ----------
+config.json
+config.prev.json
+config.json.bak-*
+config.prev.json.bak-*
+*.bak-*
+hotspots.json
+hotspot_events.json
+
+# ---------- ③ 媒体与录制品（体积巨大，且含主播内容） ----------
+recordings/
+recordings_backup_*/
+previews/
+spool/
+*.flv
+*.ass
+*.mp4
+*.m4s
+*.ts
+
+# ---------- ④ 日志 ----------
+logs/
+*.log
+launchd.*.log
+
+# ---------- ⑤ 环境与缓存 ----------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.DS_Store
+.vscode/
+.idea/

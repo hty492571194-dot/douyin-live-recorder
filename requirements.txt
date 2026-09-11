@@ -1,0 +1,23 @@
+# 运行时依赖(本机 .venv 实测版本见注释,>= 表示最低可用)
+#
+# 说明:这份清单此前只列了 4 个,漏掉了 auth.py(扫码登录)与 ffmpeg 兜底,
+#       导致「删掉 .venv 重建」后登录功能直接不可用。现已补全。
+
+# HTTP 客户端:探测开播、拉流地址、Cookie 校验
+httpx>=0.28
+
+# 弹幕 WebSocket 连接
+websocket-client>=1.9
+
+# 弹幕 Protobuf 编解码(danmaku_proto.py)
+betterproto==2.0.0b6
+
+# 弹幕签名的 JS 执行环境(danmaku.py 里 import py_mini_racer)
+mini-racer==0.14.1
+
+# 扫码登录:系统 Chrome + CDP(仅 auth.py 使用)
+# 装完还需执行一次: .venv/bin/playwright install chromium
+playwright>=1.55
+
+# ffmpeg 兜底:系统没装 ffmpeg 时用它自带的二进制(preflight 自检会提示)
+imageio-ffmpeg>=0.5

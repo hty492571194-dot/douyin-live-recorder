@@ -1,0 +1,78 @@
+{
+  "detection": {
+    "mode": "mix",
+    "cookie": "",
+    "api_base": "https://live.douyin.com/webcast/room/web/enter/",
+    "cookie_guard": {
+      "enabled": true,
+      "hotspot_only": true,
+      "min_interval_sec": 45,
+      "per_streamer_interval_sec": 300,
+      "hourly_quota": 60,
+      "daily_quota": 300,
+      "conflict_probe_interval": 300,
+      "conflict_probe_max": 3
+    }
+  },
+  "schedule": {
+    "cold_interval": 1800,
+    "cold_jitter": 0.2,
+    "hot_min": 300,
+    "hot_max": 360,
+    "live_interval": 1200,
+    "hotspot_half_width": 1800,
+    "hotspot_max": 2,
+    "hotspot_merge": 2700,
+    "hotspot_decay_days": 14,
+    "circuit_errors": 5,
+    "circuit_cooldown": 1800
+  },
+  "webui": {
+    "host": "127.0.0.1",
+    "port": 8780
+  },
+  "monitors": [
+    {
+      "name": "示例主播A",
+      "anchor": "MS4wLjABAAAA<把这里换成你自己的 sec_uid>",
+      "web_rid": "000000000000"
+    },
+    {
+      "name": "示例主播B",
+      "anchor": "MS4wLjABAAAA<把这里换成你自己的 sec_uid>",
+      "web_rid": "000000000000"
+    }
+  ],
+  "nas": {
+    "enabled": true,
+    "protocol": "smb",
+    "host": "192.168.1.10",
+    "port": 445,
+    "share": "share_video",
+    "username": "",
+    "password_ref": "keychain:douyin-nas",
+    "mount_point": "~/DouyinArchive",
+    "root_dir": "直播回放"
+  },
+  "recorder": {
+    "output_dir": "",
+    "enabled": true,
+    "format": "flv",
+    "bitrate": "",
+    "segment_time": 0,
+    "stall_seconds": 90,
+    "stall_max_restarts": 4,
+    "stall_cooldown": 600
+  },
+  "on_live_command": "echo '[record] {name} live room_id={room_id}'",
+  "on_offline_command": "echo '[stop] {name} offline'",
+  "danmaku": {
+    "enabled": true,
+    "offset_seconds": 0,
+    "font_size": 44,
+    "capture_member": false,
+    "style": "queue",
+    "queue_lines": 5,
+    "queue_seconds": 8
+  }
+}
