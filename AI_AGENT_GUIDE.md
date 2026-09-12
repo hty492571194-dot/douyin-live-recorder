@@ -115,12 +115,15 @@ run_streamer (monitor.py:658, 每主播每轮检测)
 **align.json schema**（`subtitle.py:load_align/save_align`）：
 ```json
 {"anchors": {"000": 1787348686231}, "drift_ms": -17.9, "config_offset": 0.0,
- "global_offset": 1.0?, "per_segment": {"001": -2.5}?, "finished_at": ...,
+ "global_offset": 1.0?, "per_segment": {"001": -2.5}?,
+ "gift_config_offset": 0.0, "gift_global_offset": 0.0?, "gift_per_segment": {...}?, "finished_at": ...,
  "summary": {"chat": 4, "gift": 0, "diamonds": 0, "gift_top": [{"gift":"嘉年华","count":3}]},
  "gaps": [{"type": "stall|danmaku_gap", "from": ..., "to": ..., "note": "..."}]}
 ```
 - 锚点 = FLV 首数据帧绝对毫秒 − 钟差；每分片独立锚定 → 断链错位不传播。
-- 偏移：生效值 = `(人工 global_offset 或配置 offset_seconds) + per_segment[idx]`，见 `subtitle.effective_offset`。
+- 偏移（弹幕）：生效值 = `(人工 global_offset 或配置 offset_seconds) + per_segment[idx]`，见 `subtitle.effective_offset`。
+- 偏移（礼物）：**额外量** = `(人工 gift_global_offset 或配置 gift_offset_seconds) + gift_per_segment[idx]`，
+  叠加在弹幕偏移之上，见 `subtitle.gift_extra_offset` / `effective_gift_offset`；默认 0 = 与弹幕同刻。
 
 **WebUI REST API**（`webui.py:make_handler`，GET 于 :554，POST 于 :618）：
 
@@ -135,7 +138,7 @@ run_streamer (monitor.py:658, 每主播每轮检测)
 | POST | `/api/config` | 合并更新配置（`update_config` 校验） |
 | POST | `/api/nas`、`/api/nas/test`、`/api/nas/shares` | NAS 配置/连通性/共享列表 |
 | POST | `/api/streamers/<name>/refresh`、`/rec-stop`、`/rec-start` | 主播重检 / 手动停录 / 手动复录 |
-| POST | `/api/danmaku/offset` | 应用全局/单分片偏移并重生成 .ass（`global_offset:null` = 清除） |
+| POST | `/api/danmaku/offset` | 应用全局/单分片偏移并重生成 .ass；弹幕组 `global_offset`/`per_segment`，礼物组 `gift_global_offset`/`gift_per_segment`（传 `null` = 清除，两组可独立提交） |
 | POST | `/api/history/delete` | 删历史（`clear:true` 清空） |
 | POST | `/api/open-folder`、`/api/resolve` | 打开目录 / 链接解析 |
 | GET/POST | `/api/previews/...`、`/previews/...` | 预览截图管理/展示 |
@@ -167,8 +170,9 @@ run_streamer (monitor.py:658, 每主播每轮检测)
 ├── scripts/danmaku_sign.js   WS 签名 JS（485KB vendored，勿改）
 ├── scripts/ctl.py            终端快捷指令（douyin status/start/stop/restart/help…；COMMANDS 表是命令清单唯一真源，出口 cheatsheet()）
 ├── scripts/install_cli.sh    安装/修复 ~/.local/bin/douyin 与 zsh 别名（幂等）
+├── scripts/sync_github.py    月度同步到 GitHub（禁词集从 config.json 反推，命中即中止；走 Git Data API 推送）
 ├── setup.sh / 一键启动.command  部署（启动窗口会打印命令速查表，渲染自 scripts/ctl.py）
-├── tests/              21 个测试文件（377 用例）
+├── tests/              23 个测试文件（456 用例）
 ├── config.json / hotspots.json / hotspot_events.json
 ├── recordings/         录制+字幕+ .meta 明细
 ├── spool/pending.json  NAS 队列
@@ -188,7 +192,7 @@ run_streamer (monitor.py:658, 每主播每轮检测)
 | 弹幕 jsonl 路径推导 | `danmaku.py:jsonl_for` | 统一收 `.meta/` |
 | 时间对齐、钟差、32 位回绕 | `subtitle.py:anchor_segments` / `flv_first_av_ts_abs` / `_unwrap_ts` | 锚点=FLV首帧−钟差 |
 | 字幕样式（队列/滚动） | `subtitle.py:_queue_lines` / `_scroll_lines` / `generate_ass_for_segment` | queue 为默认 |
-| 弹幕偏移微调 | `subtitle.py:effective_offset` + `webui.py:_danmaku_apply_offset` | 全局+单分片，无损重生成 |
+| 弹幕/礼物偏移微调 | `subtitle.py:effective_offset` / `gift_extra_offset` + `webui.py:_danmaku_apply_offset` | 弹幕与礼物各一组全局+单分片，无损重生成 |
 | 停滞/缺口巡检 | `subtitle.py:patrol` + `monitor.py:danmaku_patrol_loop` | 60s 一次，记 align.json gaps |
 | API 路由 | `webui.py:make_handler` | GET :554 / POST :618 |
 | 配置段、默认值 | `monitor.py:DEFAULT_CONFIG` / `load_config` | deep_merge |
@@ -205,4 +209,4 @@ run_streamer (monitor.py:658, 每主播每轮检测)
 2. **重复信息集中存放**：配置段、事件 schema、align schema、路由表各出现一次（§3），功能索引表只引用不重复展开。
 3. **导航即答案**：§2 索引表、§4 关键词映射表可直接作为 grep 前的第一跳；定位到符号后再读局部代码，避免整文件读取（最大文件 `monitor.py` 仅 960 行，`danmaku_proto.py` 861 行为 vendored 可跳过）。
 4. **修改前先看契约**：跨文件改动先核对 §3.3 的 schema/路由/回调；弹幕链路改动优先验证 `subtitle.py` 测试（`tests/test_danmaku_subtitle.py`，15+ 用例覆盖对齐/偏移/样式）。
-5. **环境事实**：依赖 4 个（见 §1）；改动后运行 `./.venv/bin/python -m unittest discover -s tests`（当前 **380 项全过**）；服务启停优先用终端快捷指令 `douyin restart` / `douyin stop` / `douyin start`（实现在 `scripts/ctl.py`，与 Web 按钮共用 `webui._service_plan()` 的执行计划；`-n` 可干跑预览，命令清单敲 `douyin help`）。**增删命令只改 `scripts/ctl.py` 的 `COMMANDS` / `ZSH_ALIASES` 表**：argparse 帮助、`douyin help`（`--short` / `--json`）、`一键启动.command` 窗口、Web「系统健康 → 终端快捷指令」卡片（数据 `GET /api/shortcuts`，见 `webui._shortcut_help()`）都由它渲染，别在别处另抄一份（`tests/test_ctl.py::TestCheatsheet` 与 `tests/test_shortcuts_api.py` 会拦）。裸 `launchctl kickstart -k gui/$(id -u)/com.douyin.monitor` 等价于「无外来实例占用端口」时的 restart（注意会中断正在进行的录制，重启后自动恢复）。**若端口被非 launchd 实例占用，kickstart 会无效**（新实例一 bind 就退出、KeepAlive 又重拉，界面连的仍是旧进程），此时先 `lsof -tiTCP:8780 -sTCP:LISTEN` 找出占用者并结束它，或用 `douyin restart` / Web 上的「重启」（两者都已内置该处理）。
+5. **环境事实**：依赖 4 个（见 §1）；改动后运行 `./.venv/bin/python -m unittest discover -s tests`（当前 **456 项全过**）；服务启停优先用终端快捷指令 `douyin restart` / `douyin stop` / `douyin start`（实现在 `scripts/ctl.py`，与 Web 按钮共用 `webui._service_plan()` 的执行计划；`-n` 可干跑预览，命令清单敲 `douyin help`）。**增删命令只改 `scripts/ctl.py` 的 `COMMANDS` / `ZSH_ALIASES` 表**：argparse 帮助、`douyin help`（`--short` / `--json`）、`一键启动.command` 窗口、Web「系统健康 → 终端快捷指令」卡片（数据 `GET /api/shortcuts`，见 `webui._shortcut_help()`）都由它渲染，别在别处另抄一份（`tests/test_ctl.py::TestCheatsheet` 与 `tests/test_shortcuts_api.py` 会拦）。裸 `launchctl kickstart -k gui/$(id -u)/com.douyin.monitor` 等价于「无外来实例占用端口」时的 restart（注意会中断正在进行的录制，重启后自动恢复）。**若端口被非 launchd 实例占用，kickstart 会无效**（新实例一 bind 就退出、KeepAlive 又重拉，界面连的仍是旧进程），此时先 `lsof -tiTCP:8780 -sTCP:LISTEN` 找出占用者并结束它，或用 `douyin restart` / Web 上的「重启」（两者都已内置该处理）。

@@ -210,6 +210,63 @@ class TestSegmentsAndAss(unittest.TestCase):
         cfg2 = {"danmaku": {"offset_seconds": -1.5}}
         self.assertEqual(subtitle.effective_offset(align, cfg2, "000"), -1.5)
 
+    # ── 礼物独立偏移(与弹幕分开的三层:配置 / 本场人工 / 单分片) ──
+    def test_gift_offset_default_falls_back_to_danmaku(self):
+        """默认礼物额外偏移为 0 → 礼物与弹幕时刻完全一致(向后兼容)。"""
+        align = {}
+        self.assertEqual(subtitle.gift_extra_offset(align, self.cfg, "000"), 0.0)
+        self.assertEqual(subtitle.effective_gift_offset(align, self.cfg, "000"),
+                         subtitle.effective_offset(align, self.cfg, "000"))
+        # 老配置没有 gift_offset_seconds 键也不能炸
+        self.assertEqual(subtitle.gift_extra_offset(align, {"danmaku": {}}, "000"), 0.0)
+
+    def test_gift_offset_layers(self):
+        """优先级:本场人工 > 配置默认;单分片在全局之上再叠加。"""
+        cfg = {"danmaku": {"offset_seconds": 1, "gift_offset_seconds": -2}}
+        align = {}
+        # 配置层:弹幕 +1,礼物额外 -2(总 -1)
+        self.assertEqual(subtitle.effective_offset(align, cfg, "000"), 1.0)
+        self.assertEqual(subtitle.gift_extra_offset(align, cfg, "000"), -2.0)
+        self.assertEqual(subtitle.effective_gift_offset(align, cfg, "000"), -1.0)
+        # 人工本场覆盖配置的礼物值,弹幕值不受影响
+        align = {"gift_global_offset": 0.5, "gift_per_segment": {"001": -0.25}}
+        self.assertEqual(subtitle.effective_offset(align, cfg, "000"), 1.0)
+        self.assertEqual(subtitle.gift_extra_offset(align, cfg, "000"), 0.5)
+        self.assertEqual(subtitle.gift_extra_offset(align, cfg, "001"), 0.25)
+        self.assertEqual(subtitle.effective_gift_offset(align, cfg, "001"), 1.25)
+
+    def test_gift_extra_shifts_only_gift_lines(self):
+        """生成 ASS 时:礼物横幅整体位移,弹幕时刻一格不动。"""
+        evs = [{"ts": self.t0 + 1000, "type": "chat", "user": "A", "uid": "1",
+                "content": "嗨"},
+               {"ts": self.t0 + 1000, "type": "gift", "user": "B", "uid": "2",
+                "gift": "嘉年华", "count": 1, "diamond": 3000}]
+        out = os.path.join(self.d, "gift-shift.ass")
+        subtitle.generate_ass_for_segment(out, evs, self.t0, 0.0, self.cfg,
+                                          gift_extra=3.0)
+        with open(out, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        chat = [x for x in lines if x.startswith("Dialogue: 0,")]
+        gift = [x for x in lines if x.startswith("Dialogue: 1,")]
+        self.assertTrue(chat, "应有弹幕行")
+        self.assertTrue(gift, "应有礼物横幅行")
+        # 事件在 anchor+1s:弹幕 1s 起;礼物 +3s → 4s 起
+        self.assertEqual(chat[0].split(",")[1], "0:00:01.00")
+        self.assertEqual(gift[0].split(",")[1], "0:00:04.00")
+
+    def test_gift_offset_in_session_info_and_align(self):
+        """generate_session:info 带礼物偏移,align.json 快照配置值。"""
+        cfg = {"danmaku": {"font_size": 44, "gift_offset_seconds": -1.5,
+                           "offset_seconds": 0.5}}
+        info = subtitle.generate_session(self.pattern, cfg)
+        for seg in info:
+            self.assertEqual(seg["offset"], 0.5)
+            self.assertEqual(seg["gift_extra"], -1.5)
+            self.assertEqual(seg["gift_offset"], -1.0)
+        align = subtitle.load_align(self.pattern)
+        self.assertEqual(align["config_offset"], 0.5)
+        self.assertEqual(align["gift_config_offset"], -1.5)
+
     def test_summarize(self):
         s = subtitle.summarize(self.jsonl)
         # 7 条 chat:6 条分段内 + 1 条录制启动前(汇总统计全场 jsonl 原始明细,

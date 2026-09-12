@@ -195,7 +195,9 @@ class State:
             for k in ("enabled", "capture_member"):
                 if k in dm and not isinstance(dm[k], bool):
                     return f"danmaku.{k}: 必须是布尔值"
-            for k, lo, hi in (("offset_seconds", -3600, 3600), ("font_size", 10, 200),
+            for k, lo, hi in (("offset_seconds", -3600, 3600),
+                              ("gift_offset_seconds", -3600, 3600),
+                              ("font_size", 10, 200),
                               ("queue_lines", 1, 8), ("queue_seconds", 2, 60)):
                 if k in dm:
                     v = dm[k]
@@ -912,14 +914,19 @@ def _danmaku_session(state, path):
     segments = []
     for i, (idx, p, anchor) in enumerate(segs):
         ass = subtitle_mod.ass_path_for_segment(p)
-        extra = (align.get("per_segment") or {}).get(idx if idx is not None else "_", 0) or 0
+        key = idx if idx is not None else "_"
+        extra = (align.get("per_segment") or {}).get(key, 0) or 0
+        g_extra = (align.get("gift_per_segment") or {}).get(key, 0) or 0
+        off = subtitle_mod.effective_offset(align, cfg, idx)
         segments.append({
-            "idx": idx if idx is not None else "_",
+            "idx": key,
             "file": os.path.basename(p),
             "anchor": anchor,
             "anchor_str": time.strftime("%H:%M:%S", time.localtime(anchor / 1000)),
-            "offset": subtitle_mod.effective_offset(align, cfg, idx),
+            "offset": off,
             "extra": extra,
+            "gift_extra": g_extra,
+            "gift_offset": subtitle_mod.effective_gift_offset(align, cfg, idx),
             "ass": os.path.exists(ass),
             "ass_file": os.path.basename(ass) if ass else "",
         })
@@ -928,6 +935,8 @@ def _danmaku_session(state, path):
         "segments": segments,
         "global_offset": align.get("global_offset"),
         "config_offset": (cfg.get("danmaku") or {}).get("offset_seconds", 0) or 0,
+        "gift_global_offset": align.get("gift_global_offset"),
+        "gift_config_offset": (cfg.get("danmaku") or {}).get("gift_offset_seconds", 0) or 0,
         "gaps": align.get("gaps", []),
         "drift_ms": align.get("drift_ms", 0),
         "has_events": has_events,
@@ -936,38 +945,56 @@ def _danmaku_session(state, path):
     }
 
 
+def _apply_one_offset_group(align, body, gkey, pkey, seg_label):
+    """写入一组人工偏移(全局键 gkey + 分片键 pkey);返回错误串或 None。
+
+    语义与旧版一致:body 里没有该键则不动;全局键传 null 表示清除(回到配置
+    默认);分片键传 {} 表示清空全部单分片偏移。弹幕与礼物各走一组。
+    """
+    if gkey in body:
+        if body[gkey] is None:
+            align.pop(gkey, None)  # 清除本场人工偏移,回到配置默认
+        else:
+            try:
+                v = float(body[gkey])
+            except (TypeError, ValueError):
+                return f"{gkey} 必须是数值"
+            if abs(v) > 3600:
+                return f"{gkey} 范围 ±3600 秒"
+            align[gkey] = v
+    ps = body.get(pkey)
+    if ps is not None:
+        if not isinstance(ps, dict):
+            return f"{pkey} 必须是对象"
+        merged = {} if not ps else align.setdefault(pkey, {})
+        for k, v in ps.items():
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                return f"分片 {k} {seg_label}必须是数值"
+            if abs(v) > 3600:
+                return f"分片 {k} {seg_label}范围 ±3600 秒"
+            merged[str(k)] = v
+        align[pkey] = merged
+    return None
+
+
 def _danmaku_apply_offset(state, body):
-    """应用人工偏移并从 jsonl 重新生成 .ass(无损、可反复调)。"""
+    """应用人工偏移并从 jsonl 重新生成 .ass(无损、可反复调)。
+
+    两组偏移各自独立:global_offset/per_segment 管弹幕,
+    gift_global_offset/gift_per_segment 管礼物(叠加在弹幕之上)。
+    """
     out, guard = _danmaku_guard(state, body.get("path"))
     if not out:
         return guard
     cfg = guard
     align = subtitle_mod.load_align(out)
-    if "global_offset" in body:
-        if body["global_offset"] is None:
-            align.pop("global_offset", None)  # 清除本场人工偏移,回到配置默认
-        else:
-            try:
-                v = float(body["global_offset"])
-            except (TypeError, ValueError):
-                return {"ok": False, "error": "global_offset 必须是数值"}
-            if abs(v) > 3600:
-                return {"ok": False, "error": "global_offset 范围 ±3600 秒"}
-            align["global_offset"] = v
-    ps = body.get("per_segment")
-    if ps is not None:
-        if not isinstance(ps, dict):
-            return {"ok": False, "error": "per_segment 必须是对象"}
-        merged = {} if not ps else align.setdefault("per_segment", {})
-        for k, v in ps.items():
-            try:
-                v = float(v)
-            except (TypeError, ValueError):
-                return {"ok": False, "error": f"分片 {k} 偏移必须是数值"}
-            if abs(v) > 3600:
-                return {"ok": False, "error": f"分片 {k} 偏移范围 ±3600 秒"}
-            merged[str(k)] = v
-        align["per_segment"] = merged
+    for args in (("global_offset", "per_segment", "偏移"),
+                 ("gift_global_offset", "gift_per_segment", "礼物偏移")):
+        err = _apply_one_offset_group(align, body, *args)
+        if err:
+            return {"ok": False, "error": err}
     subtitle_mod.generate_session(out, cfg, align, drift_ms=align.get("drift_ms") or 0)
     return _danmaku_session(state, out)
 

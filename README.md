@@ -37,6 +37,24 @@ douyin restart -n # 干跑：只打印将要执行的步骤，不真执行
 - 命令清单只维护在 `scripts/ctl.py` 的 `COMMANDS` 表里：argparse 帮助、`douyin help`、双击 `一键启动.command` 时窗口里打印的速查表、以及 Web 控制台「系统健康 → 终端快捷指令」那张卡片，全都由它渲染，四处不会各说各话。记不住命令时也可以直接看那张卡片（`GET /api/shortcuts`），点命令格即可复制。
 - 项目搬家或换机后重跑 `bash scripts/install_cli.sh` 即自动修复入口路径；`--uninstall` 可整体卸掉。
 
+## 月度同步到 GitHub
+
+本地改动按**月度**同步到公开仓库（每月 1 日 21:00 自动触发，手动同样可用）：
+
+```bash
+.venv/bin/python scripts/sync_github.py --check     # 只扫描:待提交文件里有没有真实值泄露
+.venv/bin/python scripts/sync_github.py --dry-run   # 预览将提交哪些文件
+.venv/bin/python scripts/sync_github.py             # 扫描 → 提交 → 推送
+```
+
+脚本先从 `config.json`（已被 `.gitignore` 排除）反推禁词集 —— 主播昵称、`sec_uid`、
+直播间号、NAS 主机/共享名、内网网段 —— 命中任一项即**中止不推**。
+`.gitignore` 已排除 `auth/`（登录态）、`config.json` 及备份、`hotspots*.json`、
+`recordings*/`、`logs/`、`previews/`、`spool/`、`.venv/`。
+
+> 受管/自动化环境里 `github.com` 不可达（只有 `api.github.com` 通），脚本因此走
+> Git Data API 推送；在你自己的终端里 `git push` 同样可用。
+
 ## 文件结构
 
 ```

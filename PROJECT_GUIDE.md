@@ -37,12 +37,13 @@ douyin-monitor/
 │   └── history.json      # 录制历史(启动时自动清理孤儿 recording 记录)
 ├── logs/                 # 日志(按天,保留 7 天):monitor-YYYY-MM-DD.log
 ├── spool/                # NAS 归档待搬运队列(运行时生成)
-├── tests/                # 单测(21 个文件/380 项):检测/调度/录制/归档/服务控制/健康面板/快捷指令卡片
+├── tests/                # 单测(23 个文件/456 项):检测/调度/录制/归档/服务控制/健康面板/快捷指令卡片/字段表分组结构/月度同步
 ├── scripts/
 │   ├── verify.sh         # 机械验收门(分 phase 累积执行:verify.sh a/b/c/d)
 │   ├── pack.sh           # 打包迁移脚本(脱敏 config → tar.gz)
 │   ├── ctl.py            # 终端快捷指令实现(douyin status/start/stop/restart…);COMMANDS 表=命令清单唯一真源
-│   └── install_cli.sh    # 安装/修复 ~/.local/bin/douyin 与 zsh 别名(幂等)
+│   ├── install_cli.sh    # 安装/修复 ~/.local/bin/douyin 与 zsh 别名(幂等)
+│   └── sync_github.py    # 月度同步到 GitHub(扫描敏感内容→提交→走 Git Data API 推送)
 ├── setup.sh              # 一键部署(venv + 依赖 + 可选 --launchd 开机自启)
 ├── 一键启动.command        # macOS 双击即用(首次自动部署 + 启动后自动打开浏览器)
 ├── requirements.txt      # 唯一依赖:httpx

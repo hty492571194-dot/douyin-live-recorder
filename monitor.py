@@ -137,9 +137,13 @@ DEFAULT_CONFIG = {
     "archive": {"mode": "auto", "external_dir": ""},
     "preview": {"dir": "", "start_delay": 60, "interval": 30, "shots": 5},
     "recorder": {"output_dir": "", "enabled": True, "format": "flv",
-                 "bitrate": 0, "segment_time": 0},
-    "danmaku": {"enabled": True, "offset_seconds": 0, "font_size": 44,
-                "capture_member": False, "style": "queue",
+                 "bitrate": 0, "segment_time": 0,
+                 # 停滞自愈(「假在线」防护):_maintain_recording 读取,高级参数页可改。
+                 # 必须登记在默认配置里,否则 /api/config 不返回它们、页面回填为空,
+                 # 显示的「当前值」会与真正生效的 90/4/600 不一致。
+                 "stall_seconds": 90, "stall_max_restarts": 4, "stall_cooldown": 600},
+    "danmaku": {"enabled": True, "offset_seconds": 0, "gift_offset_seconds": 0,
+                "font_size": 44, "capture_member": False, "style": "queue",
                 "queue_lines": 5, "queue_seconds": 8},
     "on_live_command": "echo '[record] {name} live room_id={room_id}'",
     "on_offline_command": "echo '[stop] {name} offline'",

@@ -9,6 +9,10 @@
   解回绕;相对时间戳或解析失败时回退 birthtime 本身。
 - 人工微调:align.json 的 global_offset(本场) + per_segment(单分片),
   从 jsonl 原始明细无损重新生成 .ass。
+- 礼物独立偏移:礼物走与弹幕不同的消息通道(轻礼物是连击聚合消息,时间戳
+  常整体滞后),故额外支持 gift_global_offset(本场) + gift_per_segment(单分片)
+  + 配置 danmaku.gift_offset_seconds。生效值叠加在弹幕偏移之上,默认 0 即
+  与弹幕完全一致(向后兼容)。
 
 字幕样式(danmaku.style):
 - queue(默认):屏幕下方最多 5 行队列,每条发言独立一行;新发言从最下方
@@ -435,8 +439,12 @@ def _queue_lines(filtered, font_size, end_ms, anchor_ms, offset_sec, dm_cfg):
 
 
 def generate_ass_for_segment(path_out, events, anchor_ms, offset_sec, cfg,
-                             end_ms=None):
-    """为一个分片生成 .ass。events 为该时间区间内的弹幕事件列表。"""
+                             end_ms=None, gift_extra=0.0):
+    """为一个分片生成 .ass。events 为该时间区间内的弹幕事件列表。
+
+    gift_extra:礼物事件额外偏移(秒),叠加在 offset_sec 之上(弹幕不动)。
+    只影响事件时刻,不影响分片时长换算(end_ms 仍按原始 ts 过滤)。
+    """
     dm_cfg = cfg.get("danmaku") or {}
     font_size = int(dm_cfg.get("font_size", 44))
     show_member = bool(dm_cfg.get("capture_member", False))
@@ -448,6 +456,8 @@ def generate_ass_for_segment(path_out, events, anchor_ms, offset_sec, cfg,
         if ev.get("type") == "member" and not show_member:
             continue
         t = ((ev.get("ts") or 0) - anchor_ms) / 1000.0 + offset_sec
+        if ev.get("type") == "gift":
+            t += gift_extra
         if t < 0:
             continue  # 事件早于视频起点(录制启动前),丢弃
         if end_ms is not None and (ev.get("ts") or 0) > end_ms + GRACE_AFTER_END * 1000:
@@ -476,6 +486,28 @@ def effective_offset(align: dict, cfg, idx) -> float:
     return float(manual) + float(extra)
 
 
+def gift_extra_offset(align: dict, cfg, idx) -> float:
+    """礼物**额外**偏移(叠加在弹幕偏移之上,默认 0 即与弹幕完全一致)。
+
+    为什么礼物要单独一格:礼物走的是与弹幕不同的消息通道,抖音的轻礼物
+    (WebcastLightGiftMessage)是连击聚合消息,同一串连击的时间戳可能整体
+    滞后或提前,即使弹幕已经对齐,礼物横幅仍可能偏。两者共用一个偏移时
+    只能取折中,分开后各自可调。
+
+    优先级与弹幕一致:人工本场 > 配置默认;分片级再叠加。
+    """
+    manual = align.get("gift_global_offset")
+    if not isinstance(manual, (int, float)):
+        manual = float((cfg.get("danmaku") or {}).get("gift_offset_seconds", 0) or 0)
+    extra = (align.get("gift_per_segment") or {}).get(idx if idx is not None else "_", 0) or 0
+    return float(manual) + float(extra)
+
+
+def effective_gift_offset(align: dict, cfg, idx) -> float:
+    """礼物事件在字幕时间轴上的总偏移 = 弹幕偏移 + 礼物额外偏移。"""
+    return effective_offset(align, cfg, idx) + gift_extra_offset(align, cfg, idx)
+
+
 def generate_session(output_path: str, cfg, align=None, drift_ms=0.0):
     """为一次录制会话(输出路径/模式)生成全部分片的 .ass。
     返回生成的分片信息列表 [{idx, file, anchor, offset}]。"""
@@ -494,9 +526,14 @@ def generate_session(output_path: str, cfg, align=None, drift_ms=0.0):
         last = flv_last_ts_abs(path)
         end_ms = int(last - drift_ms) if last is not None else None
         off = effective_offset(align, cfg, idx)
-        generate_ass_for_segment(ass_path_for_segment(path), evs, anchor, off, cfg, end_ms)
-        info.append({"idx": idx, "file": path, "anchor": anchor, "offset": off})
-    align.setdefault("config_offset", float((cfg.get("danmaku") or {}).get("offset_seconds", 0) or 0))
+        g_extra = gift_extra_offset(align, cfg, idx)
+        generate_ass_for_segment(ass_path_for_segment(path), evs, anchor, off, cfg,
+                                 end_ms, gift_extra=g_extra)
+        info.append({"idx": idx, "file": path, "anchor": anchor, "offset": off,
+                     "gift_extra": g_extra, "gift_offset": off + g_extra})
+    dm_cfg = cfg.get("danmaku") or {}
+    align.setdefault("config_offset", float(dm_cfg.get("offset_seconds", 0) or 0))
+    align.setdefault("gift_config_offset", float(dm_cfg.get("gift_offset_seconds", 0) or 0))
     save_align(output_path, align)
     return info
 

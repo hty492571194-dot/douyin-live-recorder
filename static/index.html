@@ -416,7 +416,7 @@ main { flex: 1; padding: 26px 32px; max-width: 1440px; }
   display: flex; align-items: center; justify-content: center; }
 .dm-modal.hidden { display: none; }
 .dm-panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-  width: min(680px, 92vw); max-height: 82vh; display: flex; flex-direction: column; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+  width: min(780px, 94vw); max-height: 82vh; display: flex; flex-direction: column; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
 .dm-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
 .dm-head b { font-size: 14px; }
 .dm-sub { color: var(--muted); font-size: 12px; flex: 1; }
@@ -424,12 +424,14 @@ main { flex: 1; padding: 26px 32px; max-width: 1440px; }
 .dm-global { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
 .dm-global input { width: 80px; }
 .dm-global .hint { flex: 1; }
-.dm-seg { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+/* 礼物偏移与弹幕偏移并排展示,用左侧色条区分两组;两者互不影响 */
+.dm-global.dm-gift { border-left: 2px solid var(--accent-2); padding-left: 10px; }
+.dm-seg { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .dm-seg:last-child { border-bottom: none; }
 .dm-seg .s-idx { font-family: ui-monospace, Menlo, monospace; color: var(--accent-2); min-width: 42px; }
 .dm-seg .s-file { color: var(--muted); font-size: 12px; flex: 1; word-break: break-all; }
-.dm-seg input { width: 64px; }
-.dm-seg .s-sec { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 110px; }
+.dm-seg input { width: 56px; }
+.dm-seg .s-sec { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 150px; font-size: 12px; }
 .dm-sum { margin-top: 10px; padding: 10px; background: var(--panel-2); border-radius: 8px;
   color: var(--muted); font-size: 12px; line-height: 1.8; }
 .dm-sum b { color: var(--text); }
@@ -555,11 +557,56 @@ main { flex: 1; padding: 26px 32px; max-width: 1440px; }
 .field input:focus, .field select:focus { border-color: var(--accent); }
 .field .unit { color: var(--muted); font-size: 12px; min-width: 26px; }
 .field .hint { font-size: 11px; color: #5b6270; }
-.field.wide { grid-column: 1 / -1; }
-.field.wide textarea { width: 100%; background: var(--panel-2); color: var(--text);
-  border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 13px;
-  font-family: ui-monospace, Menlo, monospace; resize: vertical; min-height: 64px; outline: none; }
-.field.wide textarea:focus { border-color: var(--accent); }
+
+/* ── 高级参数:分组折叠 + 行式排版 ──
+   这张卡有 25 个字段,平铺会拉成好几屏,且说明文字长短不一导致三列网格行高参差。
+   改为三层收敛:① 按用途分组,组头一行带说明与条数;② 组内一行一字段,
+   标签 / 控件 / 说明三列对齐,行高一致不再参差;③ 不常改的组默认收起。
+   折叠用 class 切换 display,不增删 DOM —— collectFields/loadConfig 按 data-path
+   全量收集,收起组里的值照常回填与保存。 */
+.adv-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.adv-title .adv-sub { font-weight: 400; color: var(--muted); font-size: 11px; margin-left: 8px; }
+.adv-title .adv-toggle-all { padding: 4px 12px; font-size: 12px; }
+
+.fg { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
+.fg:last-child { margin-bottom: 0; }
+.fg-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px;
+  background: var(--panel-2); border: 0; color: var(--text); font: inherit; font-size: 13px;
+  text-align: left; cursor: pointer; user-select: none; }
+.fg-head:hover { background: rgba(91, 140, 255, .10); }
+.fg-head .fg-name { font-weight: 600; }
+.fg-head .fg-note { flex: 1; color: var(--muted); font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fg-head .fg-cnt { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.fg.open .coll-arrow { transform: rotate(90deg); }
+.fg-body { padding: 2px 12px 6px; }
+.fg:not(.open) .fg-body { display: none; }
+
+.frow { display: grid; grid-template-columns: 150px 168px minmax(0, 1fr); gap: 12px;
+  align-items: center; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.frow:last-child { border-bottom: 0; }
+.frow.txt { grid-template-columns: 150px 300px minmax(0, 1fr); }
+.frow label { font-size: 12px; color: var(--muted); }
+.frow .ctl { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.frow input, .frow select { width: 100%; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 13px;
+  outline: none; transition: border .15s; }
+.frow input:focus, .frow select:focus { border-color: var(--accent); }
+.frow .unit { color: var(--muted); font-size: 12px; min-width: 20px; }
+.frow .hint { font-size: 11px; color: #5b6270; }
+.frow.wide { grid-template-columns: 150px minmax(0, 1fr); align-items: start; padding-top: 10px; }
+.frow.wide label { padding-top: 8px; }
+.frow.wide .ctl, .frow.wide .hint { grid-column: 2; }
+.frow.wide textarea { width: 100%; min-height: 56px; resize: vertical; outline: none;
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 9px 10px; font-size: 12px;
+  font-family: ui-monospace, Menlo, monospace; }
+.frow.wide textarea:focus { border-color: var(--accent); }
+@media (max-width: 900px) {
+  .frow, .frow.txt, .frow.wide { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+  .frow.wide label { padding-top: 0; }
+  .frow.wide .ctl, .frow.wide .hint { grid-column: auto; }
+}
 
 .save-bar { display: flex; align-items: center; gap: 14px; margin-top: 4px; }
 .toast { font-size: 13px; color: var(--ok); opacity: 0; transition: opacity .3s; }
@@ -681,8 +728,11 @@ main { flex: 1; padding: 26px 32px; max-width: 1440px; }
           带登录态会挤占多路并发录制,弹幕连接因此始终保持匿名。</div>
       </div>
       <div class="card" data-page-node-id="upjS2y4OYygsCGujh0kbER">
-        <div class="card-title" data-page-node-id="qcrrdIXRMkJtPSVNNZR4D4">监控与开播检测</div>
-        <div class="grid" id="grid-advanced" data-page-node-id="It0ff1P9aWs4BE6kAoXpR7"></div>
+        <div class="card-title adv-title" data-page-node-id="qcrrdIXRMkJtPSVNNZR4D4">
+          <span>监控与开播检测<span class="adv-sub">按用途分组,不常改的组可收起</span></span>
+          <button class="btn btn-ghost adv-toggle-all" id="adv-toggle-all" type="button">全部收起</button>
+        </div>
+        <div id="grid-advanced" data-page-node-id="It0ff1P9aWs4BE6kAoXpR7"></div>
       </div>
       <div class="card" data-page-node-id="FdnP61hkX36Hm7dskU1Bsw">
         <div class="card-title" data-page-node-id="t4CPg5W35wu4cwvl9VqaJz">录制设置</div>
@@ -944,29 +994,64 @@ const COMMON_FIELDS = [
   ["schedule.hotspot_half_width", "热点窗口半宽", "number", "秒", "开播时间前后范围(默认 1800)"],
   ["schedule.hotspot_max", "每主播热点上限", "number", "个", "最多保留的热点窗口数"],
 ];
-const ADVANCED_FIELDS = [
-  ["detection.cookie", "Cookie(API 通道)", "text", null, "API 确认通道需填,留空自动回退 302"],
-  ["danmaku.enabled", "弹幕/礼物录制", "bool", null, "开播时同步抓取弹幕与礼物(匿名连接,失败不影响录制),生成同名 .ass 字幕随分片自动加载"],
-  ["danmaku.style", "字幕样式", "select", ["queue", "scroll"], "queue=屏幕下方最多 5 行队列,新发言从最下方挤入、旧字幕逐行上移;scroll=传统从右向左横向滚动"],
-  ["danmaku.queue_lines", "队列显示行数", "number", "行", "queue 样式下屏幕底部最多同时显示的行数(默认 5,最大 8)"],
-  ["danmaku.queue_seconds", "单条停留时长", "number", "秒", "queue 样式下每条弹幕最长显示秒数,超时自动消失(默认 8)"],
-  ["danmaku.offset_seconds", "弹幕全局偏移", "number", "秒", "字幕相对视频的整体偏移(正值延后);单场微调请用历史页「弹幕」面板(默认 0)"],
-  ["danmaku.font_size", "弹幕字号", "number", "px", "弹幕字幕字号(默认 44)"],
-  ["danmaku.capture_member", "记录进场消息", "bool", null, "进场消息仅入 jsonl 明细(供 AI 分析),不进字幕;量大默认关"],
-  ["schedule.hotspot_merge_hours", "热点合并阈值", "number", "小时", "实时层:开播相差小于此值并入同窗口,合并取较早(默认 5)"],
-  ["schedule.deviation_trigger_minutes", "偏移触发分析", "number", "分钟", "开播时间偏离现热点中心超过此值,立即重新分析(默认 60)"],
-  ["schedule.analysis_hour", "每日分析时刻", "number", "点", "每天几点全量重算热点(默认 5)"],
-  ["schedule.analysis_min_events", "分析最少事件", "number", "个", "7 天内开播事件不足此数不重算热点(默认 5)"],
-  ["schedule.analysis_cluster_min", "聚类邻距", "number", "分钟", "开播事件相差小于此值归入同簇(默认 90)"],
-  ["schedule.event_retention_days", "事件保留", "number", "天", "原始开播事件日志保留时长(默认 7)"],
-  ["schedule.recency_weight", "近期权重", "number", "倍", "近 3 天事件在聚类中的权重倍数(默认 2)"],
-  ["schedule.max_witness_gap", "见证区间上限", "number", "秒", "两次检测间隔超过此值,估计开播时间不可靠则不记录(默认 7200)"],
-  ["schedule.hotspot_decay_days", "热点衰减", "number", "天", "N 天未命中即淘汰"],
-  ["schedule.circuit_errors", "熔断错误阈值", "number", "次", "连续异常次数触发熔断"],
-  ["schedule.circuit_cooldown", "熔断冷却", "number", "秒", "熔断后的退避时长"],
-  ["recorder.stall_seconds", "数据流停滞阈值", "number", "秒", "ffmpeg 存活但文件持续 N 秒无增长即重启(防「假在线」录不到内容);过半阈值先在主播页告警(默认 90)"],
-  ["recorder.stall_max_restarts", "停滞重启上限", "number", "次", "单场因停滞重启达此次数仍无数据则停止本场录制,避免空转刷历史(默认 4)"],
-  ["recorder.stall_cooldown", "救不回冷却期", "number", "秒", "本场被判定救不回来(ffmpeg 反复退出或重启达上限)后,冷却期内不再重开,避免每轮巡检刷一条空历史(默认 600)"],
+/* 「监控与开播检测」字段表 —— 本卡字段的唯一真源
+   字段项:[路径, 标签, 类型, 单位, 说明]
+     · 类型 text / number / select / bool / textarea
+     · select 的「单位」位放选项数组;textarea 渲染为整行宽的等宽输入框
+   分组:name 组名、note 组头说明、open 默认是否展开、fields 组内字段。
+     用户手动折叠的状态存在 localStorage 里,优先于 open。
+   加字段 / 改标签 / 挪分组都只动这一张表 —— 渲染与折叠都由它驱动,别处不要再抄一份。 */
+const ADVANCED_GROUPS = [
+  {
+    name: "检测通道", open: true, note: "判定主播是否真的在播",
+    fields: [
+      ["detection.cookie", "Cookie(API 通道)", "text", null, "API 确认通道需填,留空自动回退 302"],
+    ],
+  },
+  {
+    name: "弹幕与字幕", open: true, note: "弹幕抓取、字幕样式与时间戳偏移",
+    fields: [
+      ["danmaku.enabled", "弹幕/礼物录制", "bool", null, "开播时同步抓取弹幕与礼物(匿名连接,失败不影响录制),生成同名 .ass 字幕随分片自动加载"],
+      ["danmaku.style", "字幕样式", "select", ["queue", "scroll"], "queue=屏幕下方最多 5 行队列,新发言从最下方挤入、旧字幕逐行上移;scroll=传统从右向左横向滚动"],
+      ["danmaku.queue_lines", "队列显示行数", "number", "行", "queue 样式下屏幕底部最多同时显示的行数(默认 5,最大 8)"],
+      ["danmaku.queue_seconds", "单条停留时长", "number", "秒", "queue 样式下每条弹幕最长显示秒数,超时自动消失(默认 8)"],
+      ["danmaku.offset_seconds", "弹幕全局偏移", "number", "秒", "字幕相对视频的整体偏移(正值延后);单场微调请用历史页「弹幕」面板(默认 0)"],
+      ["danmaku.gift_offset_seconds", "礼物额外偏移", "number", "秒", "在弹幕偏移之上再给礼物横幅加偏移(正值延后);抖音轻礼物是连击聚合消息,时间戳常与弹幕不同步,故单独一格,默认 0=与弹幕一致"],
+      ["danmaku.font_size", "弹幕字号", "number", "px", "弹幕字幕字号(默认 44)"],
+      ["danmaku.capture_member", "记录进场消息", "bool", null, "进场消息仅入 jsonl 明细(供 AI 分析),不进字幕;量大默认关"],
+    ],
+  },
+  {
+    name: "热点模型", open: false, note: "开播时段学习与热度窗口,决定轮询频率",
+    fields: [
+      ["schedule.hotspot_merge_hours", "热点合并阈值", "number", "小时", "实时层:开播相差小于此值并入同窗口,合并取较早(默认 5)"],
+      ["schedule.deviation_trigger_minutes", "偏移触发分析", "number", "分钟", "开播时间偏离现热点中心超过此值,立即重新分析(默认 60)"],
+      ["schedule.analysis_hour", "每日分析时刻", "number", "点", "每天几点全量重算热点(默认 5)"],
+      ["schedule.analysis_min_events", "分析最少事件", "number", "个", "7 天内开播事件不足此数不重算热点(默认 5)"],
+      ["schedule.analysis_cluster_min", "聚类邻距", "number", "分钟", "开播事件相差小于此值归入同簇(默认 90)"],
+      ["schedule.event_retention_days", "事件保留", "number", "天", "原始开播事件日志保留时长(默认 7)"],
+      ["schedule.recency_weight", "近期权重", "number", "倍", "近 3 天事件在聚类中的权重倍数(默认 2)"],
+      ["schedule.max_witness_gap", "见证区间上限", "number", "秒", "两次检测间隔超过此值,估计开播时间不可靠则不记录(默认 7200)"],
+      ["schedule.hotspot_decay_days", "热点衰减", "number", "天", "N 天未命中即淘汰"],
+    ],
+  },
+  {
+    name: "稳定性与自愈", open: false, note: "熔断退避与录制停滞自愈,防「假在线」",
+    fields: [
+      ["schedule.circuit_errors", "熔断错误阈值", "number", "次", "连续异常次数触发熔断"],
+      ["schedule.circuit_cooldown", "熔断冷却", "number", "秒", "熔断后的退避时长"],
+      ["recorder.stall_seconds", "数据流停滞阈值", "number", "秒", "ffmpeg 存活但文件持续 N 秒无增长即重启(防「假在线」录不到内容);过半阈值先在主播页告警(默认 90)"],
+      ["recorder.stall_max_restarts", "停滞重启上限", "number", "次", "单场因停滞重启达此次数仍无数据则停止本场录制,避免空转刷历史(默认 4)"],
+      ["recorder.stall_cooldown", "救不回冷却期", "number", "秒", "本场被判定救不回来(ffmpeg 反复退出或重启达上限)后,冷却期内不再重开,避免每轮巡检刷一条空历史(默认 600)"],
+    ],
+  },
+  {
+    name: "开播 / 下播命令", open: false, note: "检测到开播或下播时执行的外部命令",
+    fields: [
+      ["on_live_command", "开播命令", "textarea", null, "支持占位符 {name} {anchor} {room_id} {sec_uid} {room_url} {stream_url}"],
+      ["on_offline_command", "下播命令", "textarea", null, "支持占位符 {name} {anchor}"],
+    ],
+  },
 ];
 const RECORDER_FIELDS = [
   ["recorder.bitrate", "录制码率", "text", null, "数字(Kbps)或 3000k/3M;留空/0=复制原流不重编码(最省CPU)"],
@@ -978,10 +1063,6 @@ const PREVIEW_FIELDS = [
   ["preview.start_delay", "截图开始延迟", "number", "秒", "开播后多久截第一张(默认 60)"],
   ["preview.interval", "截图间隔", "number", "秒", "每张间隔(默认 30)"],
   ["preview.shots", "截图张数", "number", "张", "每次开播最多截几张(默认 5)"],
-];
-const ADVANCED_TEXT = [
-  ["on_live_command", "开播命令", "支持占位符 {name} {anchor} {room_id} {sec_uid} {room_url} {stream_url}"],
-  ["on_offline_command", "下播命令", "支持占位符 {name} {anchor}"],
 ];
 
 let config = {};
@@ -1289,44 +1370,122 @@ async function runRetentionSweep(apply) {
 }
 
 /* ── 表单渲染 ── */
+/* 字段表「类型」→ DOM 控件。两条渲染路径共用,别各写一份(改选项/布尔文案只改这里)。 */
+function makeControl(path, type, unit) {
+  let inp;
+  if (type === "select") {
+    inp = document.createElement("select");
+    unit.forEach(o => { const x = document.createElement("option"); x.value = x.textContent = o; inp.appendChild(x); });
+  } else if (type === "bool") {
+    inp = document.createElement("select");
+    inp.dataset.bool = "1";
+    [["true", "开启"], ["false", "关闭"]].forEach(([v, t]) => {
+      const x = document.createElement("option"); x.value = v; x.textContent = t; inp.appendChild(x);
+    });
+  } else if (type === "textarea") {
+    inp = document.createElement("textarea");
+  } else {
+    inp = document.createElement("input"); inp.type = type;
+    if (type === "number") inp.step = "any";
+  }
+  inp.dataset.path = path;
+  const ctl = document.createElement("div"); ctl.className = "ctl";
+  ctl.appendChild(inp);
+  if (unit && !Array.isArray(unit) && type !== "textarea") {
+    const u = document.createElement("span"); u.className = "unit"; u.textContent = unit; ctl.appendChild(u);
+  }
+  return { ctl, inp };
+}
+
+/* 三列网格平铺:常用参数 / 录制设置 / 预览图设置 三张卡沿用。 */
 function renderFields(fields, containerId) {
   const grid = document.getElementById(containerId);
   fields.forEach(([path, label, type, unit, hint]) => {
     const d = document.createElement("div"); d.className = "field";
     const lab = document.createElement("label"); lab.textContent = label;
-    const ctl = document.createElement("div"); ctl.className = "ctl";
-    let inp;
-    if (type === "select") {
-      inp = document.createElement("select");
-      unit.forEach(o => { const x = document.createElement("option"); x.value = x.textContent = o; inp.appendChild(x); });
-    } else if (type === "bool") {
-      inp = document.createElement("select");
-      inp.dataset.bool = "1";
-      [["true", "开启"], ["false", "关闭"]].forEach(([v, t]) => {
-        const x = document.createElement("option"); x.value = v; x.textContent = t; inp.appendChild(x);
-      });
-    } else {
-      inp = document.createElement("input"); inp.type = type;
-      if (type === "number") inp.step = "any";
-    }
-    inp.dataset.path = path;
-    ctl.appendChild(inp);
-    if (unit && !Array.isArray(unit)) { const u = document.createElement("span"); u.className = "unit"; u.textContent = unit; ctl.appendChild(u); }
+    const { ctl } = makeControl(path, type, unit);
     d.appendChild(lab); d.appendChild(ctl);
     if (hint) { const h = document.createElement("span"); h.className = "hint"; h.textContent = hint; d.appendChild(h); }
     grid.appendChild(d);
   });
 }
-function renderTextFields(fields, containerId) {
-  const grid = document.getElementById(containerId);
-  fields.forEach(([path, label, hint]) => {
-    const d = document.createElement("div"); d.className = "field wide";
-    const lab = document.createElement("label"); lab.textContent = label;
-    const ta = document.createElement("textarea"); ta.dataset.path = path;
-    d.appendChild(lab); d.appendChild(ta);
-    if (hint) { const h = document.createElement("span"); h.className = "hint"; h.textContent = hint; d.appendChild(h); }
-    grid.appendChild(d);
+
+/* ── 分组折叠 + 行式排版(「监控与开播检测」卡) ──
+   分组与默认态来自 ADVANCED_GROUPS(唯一真源),用户在页面上改过的折叠态记在
+   localStorage 里、优先于表里的 open。
+   折叠只切 class,不增删 DOM —— 收起组里的字段照旧参与 loadConfig 回填与
+   collectFields 收集,保存不会漏项。 */
+const ADV_GROUP_MEMO = "advGroupOpen";
+function advGroupMemo() {
+  try { return JSON.parse(localStorage.getItem(ADV_GROUP_MEMO) || "{}") || {}; } catch (e) { return {}; }
+}
+function advGroupOpenOf(g, memo) {
+  return (g.name in memo) ? !!memo[g.name] : !!g.open;
+}
+function advAnyClosed(groups) {
+  const memo = advGroupMemo();
+  return groups.some(g => !advGroupOpenOf(g, memo));
+}
+function advGroupSet(name, open) {
+  try {
+    const m = advGroupMemo(); m[name] = !!open;
+    localStorage.setItem(ADV_GROUP_MEMO, JSON.stringify(m));
+  } catch (e) {}
+}
+function advSyncToggleAll(groups) {
+  const btn = document.getElementById("adv-toggle-all");
+  if (btn) btn.textContent = advAnyClosed(groups) ? "全部展开" : "全部收起";
+}
+function advGroupSetAll(groups, open) {
+  groups.forEach(g => advGroupSet(g.name, open));
+  const box = document.getElementById("grid-advanced");
+  if (box) box.querySelectorAll(".fg").forEach(el => el.classList.toggle("open", open));
+  advSyncToggleAll(groups);
+}
+function renderFieldGroups(groups, containerId) {
+  const box = document.getElementById(containerId);
+  const memo = advGroupMemo();
+  groups.forEach(g => {
+    const wrap = document.createElement("div");
+    wrap.className = "fg" + (advGroupOpenOf(g, memo) ? " open" : "");
+    wrap.dataset.group = g.name;
+
+    const head = document.createElement("div");
+    head.className = "fg-head";
+    head.setAttribute("role", "button");
+    head.tabIndex = 0;
+    const arrow = document.createElement("span"); arrow.className = "coll-arrow"; arrow.textContent = "▶";
+    const name = document.createElement("span"); name.className = "fg-name"; name.textContent = g.name;
+    const note = document.createElement("span"); note.className = "fg-note"; note.textContent = g.note || "";
+    const cnt = document.createElement("span"); cnt.className = "fg-cnt"; cnt.textContent = g.fields.length + " 项";
+    head.append(arrow, name, note, cnt);
+
+    const body = document.createElement("div"); body.className = "fg-body";
+    g.fields.forEach(([path, label, type, unit, hint]) => {
+      const row = document.createElement("div");
+      row.className = "frow" + (type === "textarea" ? " wide" : (type === "text" ? " txt" : ""));
+      const lab = document.createElement("label"); lab.textContent = label;
+      const { ctl } = makeControl(path, type, unit);
+      row.append(lab, ctl);
+      if (hint) { const h = document.createElement("div"); h.className = "hint"; h.textContent = hint; row.appendChild(h); }
+      body.appendChild(row);
+    });
+
+    const flip = () => {
+      const now = !wrap.classList.contains("open");
+      wrap.classList.toggle("open", now);
+      advGroupSet(g.name, now);
+      advSyncToggleAll(groups);
+    };
+    head.addEventListener("click", flip);
+    head.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); }
+    });
+
+    wrap.append(head, body);
+    box.appendChild(wrap);
   });
+  advSyncToggleAll(groups);
 }
 
 /* ── 主播列表 ── */
@@ -2140,6 +2299,8 @@ function renderDmPanel(d) {
   }
   const cfgOff = d.config_offset || 0;
   const manual = (d.global_offset != null) ? d.global_offset : cfgOff;
+  const cfgGift = d.gift_config_offset || 0;
+  const giftManual = (d.gift_global_offset != null) ? d.gift_global_offset : cfgGift;
   let html = "";
   if (!d.has_events) {
     html += '<div class="empty">本场没有弹幕明细(jsonl 不存在):录制时「弹幕/礼物录制」开关未开启。</div>';
@@ -2152,13 +2313,22 @@ function renderDmPanel(d) {
       <button class="btn btn-ghost" data-dm-step="0.5">+0.5</button>
       <span class="hint">配置全局默认 ${cfgOff}s;观看时可用播放器字幕延迟快捷键试出合适值再填这里</span>
     </div>`;
+    html += `<div class="dm-global dm-gift">
+      <span>礼物额外偏移:</span>
+      <input type="number" step="any" id="dm-gift" value="${giftManual}">
+      <span>秒</span>
+      <button class="btn btn-ghost" data-dm-gift-step="-0.5">−0.5</button>
+      <button class="btn btn-ghost" data-dm-gift-step="0.5">+0.5</button>
+      <span class="hint">叠加在弹幕偏移之上(弹幕不受影响);配置默认 ${cfgGift}s,0 = 与弹幕一致</span>
+    </div>`;
     html += d.segments.map(s => `<div class="dm-seg">
       <span class="s-idx">#${esc(String(s.idx))}</span>
       <span class="s-file">${esc(s.file)}${s.ass ? " · .ass ✓" : " · 无字幕"}</span>
-      <span class="s-sec">锚点 ${esc(s.anchor_str || "")} · 偏移 ${s.offset}s</span>
-      <span>分片偏移</span>
+      <span class="s-sec">锚点 ${esc(s.anchor_str || "")} · 弹幕 ${s.offset}s · 礼物 ${s.gift_offset}s</span>
+      <span>弹幕</span>
       <input type="number" step="any" data-dm-seg="${esc(String(s.idx))}" value="${s.extra || 0}">
-      <span>秒</span>
+      <span>礼物</span>
+      <input type="number" step="any" data-dm-gseg="${esc(String(s.idx))}" value="${s.gift_extra || 0}" title="本分片礼物额外偏移(秒)">
     </div>`).join("");
     const sum = d.summary;
     if (sum) {
@@ -2183,6 +2353,10 @@ function renderDmPanel(d) {
     const inp = document.getElementById("dm-global");
     if (inp) inp.value = (Number(inp.value) || 0) + Number(b.dataset.dmStep);
   }));
+  body.querySelectorAll("[data-dm-gift-step]").forEach(b => b.addEventListener("click", () => {
+    const inp = document.getElementById("dm-gift");
+    if (inp) inp.value = (Number(inp.value) || 0) + Number(b.dataset.dmGiftStep);
+  }));
   const apply = document.getElementById("dm-apply");
   if (apply) apply.addEventListener("click", applyDmOffsets);
   const reset = document.getElementById("dm-reset");
@@ -2200,15 +2374,29 @@ async function applyDmOffsets(opts) {
       if (Number.isNaN(v)) { alert("全局偏移必须是数字"); return; }
       body.global_offset = v;
     }
+    const gg = document.getElementById("dm-gift");
+    if (gg) {
+      const v = Number(gg.value);
+      if (Number.isNaN(v)) { alert("礼物额外偏移必须是数字"); return; }
+      body.gift_global_offset = v;
+    }
     const per = {};
     document.querySelectorAll("[data-dm-seg]").forEach(inp => {
       const v = Number(inp.value);
       if (!Number.isNaN(v)) per[inp.dataset.dmSeg] = v;
     });
     body.per_segment = per;
+    const perGift = {};
+    document.querySelectorAll("[data-dm-gseg]").forEach(inp => {
+      const v = Number(inp.value);
+      if (!Number.isNaN(v)) perGift[inp.dataset.dmGseg] = v;
+    });
+    body.gift_per_segment = perGift;
   } else {
     body.global_offset = null;
     body.per_segment = {};
+    body.gift_global_offset = null;
+    body.gift_per_segment = {};
   }
   try {
     const r = await (await fetch("/api/danmaku/offset", {
@@ -2287,7 +2475,7 @@ function collectFields() {
     pathSet(patch, inp.dataset.path, v);
   });
   if (bad) {
-    const label = (bad.closest(".field")?.querySelector("label")?.textContent) || bad.dataset.path;
+    const label = (bad.closest(".frow, .field")?.querySelector("label")?.textContent) || bad.dataset.path;
     throw new Error("「" + label + "」的内容不是纯数字(不能带\"分钟\"等单位),请只填数字(如 1800)");
   }
   return patch;
@@ -2781,10 +2969,14 @@ document.getElementById("svc-start").addEventListener("click", () => svcControl(
 
 /* ── 初始化 ── */
 renderFields(COMMON_FIELDS, "grid-common");
-renderFields(ADVANCED_FIELDS, "grid-advanced");
-renderTextFields(ADVANCED_TEXT, "grid-advanced");
+renderFieldGroups(ADVANCED_GROUPS, "grid-advanced");
 renderFields(RECORDER_FIELDS, "grid-recorder");
 renderFields(PREVIEW_FIELDS, "grid-preview");
+// 「全部展开 / 全部收起」:按钮文案由当前折叠状态决定(全展开时显示「全部收起」),
+// 有任一组收起时一键铺开。折叠态写进 localStorage,下次进来照旧。
+document.getElementById("adv-toggle-all").addEventListener("click", () => {
+  advGroupSetAll(ADVANCED_GROUPS, advAnyClosed(ADVANCED_GROUPS));
+});
 // 先拉一次状态再渲染列表:卡片顺序依赖 liveMap(最近开播时间),
 // 否则首屏只能按配置顺序铺开、等状态回来再跳一次,看着像"排序没生效"。
 (async () => {
