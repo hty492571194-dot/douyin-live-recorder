@@ -271,30 +271,39 @@ def main(argv=None):
     if a.check:
         print("=== --check：%s ===" % ("有未提交改动" if dirty else "工作区干净"))
         return 0
-    if not dirty:
-        print("=== 无改动，跳过同步 ===")
-        return 0
-
-    # 3) 提交
-    pairs, add, dele = stage_and_stat()
-    import time
-    today = time.strftime("%Y-%m-%d")
-    msg = build_message(pairs, add, dele, today, a.message)
-    print("=== 将提交 %d 个文件：+%d −%d ===" % (len(pairs), add, dele))
     if a.dry_run:
-        print("--- 提交说明 ---\n%s----------------" % msg)
-        print("=== --dry-run：未提交、未推送 ===")
+        if dirty:
+            pairs, add, dele = stage_and_stat()
+            import time
+            msg = build_message(pairs, add, dele, time.strftime("%Y-%m-%d"),
+                                a.message)
+            print("=== 将提交 %d 个文件：+%d −%d ===" % (len(pairs), add, dele))
+            print("--- 提交说明 ---\n%s----------------" % msg)
+            print("=== --dry-run：未提交、未推送（已暂存，git reset 可撤销）===")
+        else:
+            print("=== --dry-run：工作区干净，只会检查远端是否需要更新 ===")
         return 0
 
-    p = subprocess.run([GIT, "-C", base, "-c", "core.quotePath=false",
-                        "commit", "-q", "-F", "-"], input=msg.encode(),
-                       capture_output=True)
-    if p.returncode != 0:
-        print("✗ 提交失败：%s" % p.stderr.decode("utf-8", "replace").strip())
-        return 2
-    head = subprocess.run([GIT, "-C", base, "rev-parse", "HEAD"],
-                          capture_output=True, text=True).stdout.strip()
-    print("=== 已提交 %s ===" % head[:10])
+    # 3) 提交（有改动才提交）
+    if dirty:
+        pairs, add, dele = stage_and_stat()
+        import time
+        msg = build_message(pairs, add, dele, time.strftime("%Y-%m-%d"), a.message)
+        print("=== 提交 %d 个文件：+%d −%d ===" % (len(pairs), add, dele))
+        p = subprocess.run([GIT, "-C", base, "-c", "core.quotePath=false",
+                            "commit", "-q", "-F", "-"], input=msg.encode(),
+                           capture_output=True)
+        if p.returncode != 0:
+            print("✗ 提交失败：%s" % p.stderr.decode("utf-8", "replace").strip())
+            return 2
+        head = subprocess.run([GIT, "-C", base, "rev-parse", "HEAD"],
+                              capture_output=True, text=True).stdout.strip()
+        print("=== 已提交 %s ===" % head[:10])
+    else:
+        # 不能在这里直接 return —— 上一次可能「提交成功但推送失败」，
+        # 那种情况下工作区是干净的、却有提交没上远端。交给推送脚本判断
+        # （本地与远端一致它会自己秒退）。
+        print("=== 工作区干净，无新提交；检查远端是否落后 ===")
 
     # 4) 推送
     if not os.path.exists(a.push_script):
