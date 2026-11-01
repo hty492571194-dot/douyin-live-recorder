@@ -8,10 +8,49 @@ import os
 import re
 import shutil
 import subprocess
+import time
+
+# 硬件编码能力探针缓存:(时间戳, ffmpeg 路径, 结果)。`-encoders`/`-filters` 各跑
+# 一次 ffmpeg,健康面板 15 s 就会问一次,不缓存等于每 15 s fork 两个进程。
+_HW_CACHE = {"at": 0.0, "key": None, "result": None}
+_HW_TTL = 600
 
 
 def _which(cmd):
     return shutil.which(cmd)
+
+
+def probe_hw_encoder(ffmpeg_path=None, ttl=_HW_TTL):
+    """探测 `h264_videotoolbox` 是否可用 → (ok, 原因)。
+
+    为什么必须在起录前探:录制默认走硬编(2026-10-22 改造),如果这台机器上的
+    ffmpeg 没编入 VideoToolbox,`-c:v h264_videotoolbox` 会让进程**一起来就退出**,
+    表现成「检测到开播却录不到文件」—— 与当年 preset 透传那个坑完全同型。
+    探不到就整体回落 `-c copy`:宁可变大,不能丢素材。
+
+    2026-10-29 起**不再要求 `scale_vt`**:缩放已改走 CPU `scale`(swscale 是
+    ffmpeg 内置的,不可能缺),而 `scale_vt` 本身撑不住滤镜图重配置,已弃用
+    (见 `quality.SCALE_VT_ENABLED`)。老逻辑「缺 scale_vt 就让整机退回流复制」
+    会把一台本来能硬编的机器白白降级。
+    """
+    global _HW_CACHE
+    ff = ffmpeg_path or find_ffmpeg()
+    now = time.time()
+    if _HW_CACHE["result"] is not None and _HW_CACHE["key"] == ff \
+            and (now - _HW_CACHE["at"]) < ttl:
+        return _HW_CACHE["result"]
+    if not ff:
+        res = (False, "未找到 ffmpeg")
+    else:
+        try:
+            enc = subprocess.run([ff, "-hide_banner", "-encoders"],
+                                 capture_output=True, text=True, timeout=15).stdout
+            res = ((True, "") if "h264_videotoolbox" in enc
+                   else (False, "该 ffmpeg 未编入 h264_videotoolbox"))
+        except (OSError, subprocess.SubprocessError) as e:
+            res = (False, "探测失败: %s" % e)
+    _HW_CACHE = {"at": now, "key": ff, "result": res}
+    return res
 
 
 def find_ffmpeg():
@@ -104,6 +143,17 @@ def run_checks(config):
     else:
         checks.append({"id": "ffmpeg", "title": "ffmpeg", "status": "warn",
                        "detail": "未找到 ffmpeg", "action": "录制器依赖 ffmpeg,可 brew install ffmpeg"})
+
+    # 3b. 硬件编码能力(默认编码路线是 vt,探不到就会整体回落流复制)
+    hw_ok, hw_why = probe_hw_encoder(ffmpeg_path)
+    if hw_ok:
+        checks.append({"id": "hwenc", "title": "硬件编码(VideoToolbox)", "status": "ok",
+                       "detail": "h264_videotoolbox 可用(默认走硬编;缩放走 CPU swscale)", "action": ""})
+    else:
+        checks.append({"id": "hwenc", "title": "硬件编码(VideoToolbox)",
+                       "status": "fail", "detail": hw_why,
+                       "action": "录制会自动回落「流复制」(体积变大但不丢素材);"
+                                 "想恢复硬编请换一个带 VideoToolbox 的 ffmpeg"})
 
     # 4. NAS 是否配置(键缺失视为未配置)
     nas_enabled = bool((config.get("nas") or {}).get("enabled", False))

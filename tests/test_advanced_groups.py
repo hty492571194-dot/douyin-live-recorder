@@ -258,3 +258,35 @@ class TestParserSelfCheck(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGiftWatchModalExclusive(unittest.TestCase):
+    """礼物告警配置的唯一编辑入口 =「运维工具 → 机器人告警」弹窗(2026-10-10)。
+
+    ADVANCED_GROUPS 里不许再出现 gift_watch 字段 —— 同一份配置两处编辑必然漂移。
+    弹窗 gwCollect() 收集的键必须与后端 DEFAULT_CONFIG.gift_watch 严格一致,
+    防止弹窗漏字段(界面上改了、保存下去没人读)。
+    """
+
+    def setUp(self):
+        self.html = _read("static/index.html")
+
+    def test_gift_watch_not_in_advanced_groups(self):
+        block = self.html.split("const ADVANCED_GROUPS")[1].split("const RECORDER_FIELDS")[0]
+        self.assertNotIn("gift_watch.", block,
+                         "gift_watch 字段回到了高级参数 —— 唯一编辑入口是机器人告警弹窗")
+
+    def test_modal_collects_all_gift_watch_keys(self):
+        expected = set(monitor.DEFAULT_CONFIG.get("gift_watch") or {})
+        i = self.html.index("function gwCollect()")
+        snippet = self.html[i: i + 900]
+        got = set(re.findall(r"^\s{4}(\w+):", snippet, re.M))
+        self.assertEqual(got, expected,
+                         "弹窗收集的键与后端 gift_watch 不一致: 缺 %s 多 %s"
+                         % (expected - got, got - expected))
+
+    def test_modal_controls_present(self):
+        for tid in ("gwc-enabled", "gwc-channel", "gwc-silent", "gwc-level",
+                    "gwc-webhook", "gwc-busy", "gwc-cooldown", "gwc-local",
+                    "gwc-save", "gwc-test", "gwc-toast", "gwc-close"):
+            self.assertIn(f'id="{tid}"', self.html, f"弹窗控件缺失: {tid}")

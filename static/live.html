@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>实时预览</title>
+<style>
+  :root {
+    --bg: #0d0f14; --panel: #14171f; --panel-2: #1a1e28;
+    --border: #232836; --text: #e8ebf2; --muted: #8b93a7;
+    --accent: #5b8cff; --gold: #f0b429; --danger: #e5484d; --ok: #3dd68c;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 13px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         display: flex; flex-direction: column; overflow: hidden; }
+  header { display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+           background: var(--panel); border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.rec { background: var(--danger); animation: pulse 1.6s infinite; }
+  .dot.live { background: var(--ok); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .h-name { font-weight: 500; font-size: 14px; }
+  .h-state { color: var(--muted); }
+  .h-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .btn { border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+         border-radius: 7px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
+  .btn:hover { border-color: var(--accent); }
+  main { flex: 1 1 auto; display: flex; min-height: 0; }
+  .stage { flex: 1 1 auto; position: relative; background: #000; display: flex;
+           align-items: center; justify-content: center; min-width: 0; }
+  video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+  .overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+             flex-direction: column; gap: 10px; color: var(--muted); text-align: center;
+             background: rgba(10,12,16,.82); padding: 20px; }
+  .overlay.show { display: flex; }
+  .overlay b { color: var(--text); font-size: 15px; font-weight: 500; }
+  .unmute { position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%);
+            background: rgba(20,23,31,.92); border: 1px solid var(--border); color: var(--text);
+            border-radius: 999px; padding: 7px 18px; cursor: pointer; display: none; }
+  .unmute.show { display: block; }
+  aside { flex: 0 0 340px; display: flex; flex-direction: column; background: var(--panel);
+          border-left: 1px solid var(--border); min-height: 0; }
+  .a-head { padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--muted);
+            display: flex; gap: 12px; align-items: baseline; flex: 0 0 auto; }
+  .a-head b { color: var(--text); font-weight: 500; }
+  .feed { flex: 1 1 auto; overflow-y: auto; padding: 8px 12px; scroll-behavior: smooth;
+          overflow-anchor: none; }
+  .dm { margin: 5px 0; word-break: break-word; }
+  .dm .who { color: #9fb4e8; }
+  .dm.member { color: var(--muted); font-size: 12px; }
+  .dm.gift { background: rgba(240,180,41,.08); border: 1px solid rgba(240,180,41,.35);
+             border-radius: 8px; padding: 5px 9px; }
+  .dm.gift.big { border-color: var(--gold); background: rgba(240,180,41,.16); }
+  /* 车道样式由后端 display.lane 决定：slow=高价值(加粗边框)，fast=普通小额 */
+  .dm.gift.slow { font-weight: 600; }
+  .dm.gift.fast { opacity: .92; }
+  .g-badge { display: inline-block; background: var(--gold); color: #241a02; border-radius: 4px;
+             font-size: 11px; padding: 0 5px; margin-right: 6px; }
+  .dia { color: var(--gold); margin-left: 6px; font-size: 12px; }
+  .scroll-pill { position: absolute; right: 356px; bottom: 16px; display: none;
+                 background: var(--accent); color: #fff; border: 0; border-radius: 999px;
+                 padding: 6px 14px; cursor: pointer; font-size: 12px; }
+  .scroll-pill.show { display: block; }
+  .a-foot { padding: 8px 14px; border-top: 1px solid var(--border); color: var(--muted);
+            font-size: 12px; flex: 0 0 auto; display: flex; gap: 10px; }
+  .empty { color: var(--muted); text-align: center; margin-top: 30px; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="h-dot"></span>
+  <span class="h-name" id="h-name">加载中…</span>
+  <span class="h-state" id="h-state"></span>
+  <div class="h-actions">
+    <button class="btn" id="btn-room" style="display:none">打开直播间</button>
+    <button class="btn" id="btn-refresh" title="重新加载播放器">刷新</button>
+  </div>
+</header>
+<main>
+  <div class="stage">
+    <video id="v" controls playsinline muted></video>
+    <div class="overlay" id="overlay"><b id="ov-title">准备中…</b><span id="ov-sub"></span></div>
+    <button class="unmute" id="unmute">🔇 点击取消静音</button>
+    <button class="scroll-pill" id="scroll-pill">回到最新 ↓</button>
+  </div>
+  <aside>
+    <div class="a-head"><span>弹幕 <b id="c-chat">0</b></span><span>礼物 <b id="c-gift">0</b></span>
+      <span>抖币 <b id="c-dia">0</b></span></div>
+    <div class="feed" id="feed"><div class="empty">等待弹幕…</div></div>
+    <div class="a-foot"><span id="f-status">弹幕线路检查中…</span></div>
+  </aside>
+</main>
+
+<script src="/vendor/hls.min.js"></script>
+<script>
+(function () {
+  "use strict";
+  var NAME = decodeURIComponent((location.pathname || "").replace(/^\/live\/?/, ""));
+  var $ = function (id) { return document.getElementById(id); };
+  var feedEl = $("feed"), overlay = $("overlay"), video = $("v");
+
+  document.title = (NAME || "实时预览") + " · 实时预览";
+  $("h-name").textContent = NAME || "未指定主播";
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function fmtDur(sec) {
+    sec = Math.max(0, Math.floor(sec || 0));
+    var h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+    return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0");
+  }
+  function showOverlay(title, sub) {
+    overlay.classList.add("show");
+    $("ov-title").textContent = title;
+    $("ov-sub").textContent = sub || "";
+  }
+  function hideOverlay() { overlay.classList.remove("show"); }
+
+  /* ── 视频:HLS via hls.js(本地 vendored) ── */
+  var hls = null, hlsState = "idle", retryTimer = null;
+
+  function destroyHls() {
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
+    video.removeAttribute("src");
+    hlsState = "idle";
+  }
+  function startHls(m3u8) {
+    if (hlsState === "loading" || hlsState === "playing") return;
+    destroyHls();
+    hlsState = "loading";
+    if (!window.Hls || !Hls.isSupported()) {
+      showOverlay("浏览器不支持播放", "请使用最新版 Chrome / Edge / Safari 打开本页");
+      return;
+    }
+    showOverlay("拉流中…", "正在加载直播画面(约 3-8 秒)");
+    hls = new Hls({ lowLatencyMode: false, liveSyncDurationCount: 3 });
+    hls.loadSource(m3u8);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, function () {
+      hideOverlay();
+      hlsState = "playing";
+      video.play().catch(function () {});
+    });
+    hls.on(Hls.Events.ERROR, function (ev, data) {
+      if (!data || !data.fatal) return;
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        // 常见于:录制重启导致分片序号重置 / 清单暂缺 —— 销毁后延时重载
+        hlsState = "idle";
+        try { hls.destroy(); } catch (e) {}
+        hls = null;
+        showOverlay("画面中断", "正在自动重连…");
+        retryTimer = setTimeout(function () { retryTimer = null; refresh(); }, 3000);
+      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+        try { hls.recoverMediaError(); } catch (e) { destroyHls(); }
+      } else {
+        destroyHls();
+        showOverlay("播放失败", "点右上角「刷新」重试");
+      }
+    });
+  }
+
+  /* ── 状态轮询 ── */
+  var live = false, recording = false, ready = false, startedAt = 0, ticking = null;
+
+  function tickState() {
+    if (!recording) { $("h-state").textContent = live ? "直播中" : ""; return; }
+    $("h-state").textContent = "录制中 " + fmtDur(Date.now() / 1000 - startedAt);
+  }
+
+  /* ── 预览会话(按需独立拉流:打开本页才启动,关闭后约 30s 自动回收) ── */
+  var lastStartAt = 0, previewErr = "";
+  function startPreview(force) {
+    var now = Date.now();
+    if (!force && now - lastStartAt < 15000) return;   // 防抖:15s 内不重复请求
+    lastStartAt = now;
+    fetch("/api/live/" + encodeURIComponent(NAME) + "/start", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { previewErr = (d && d.ok === false) ? (d.error || "预览启动失败") : ""; })
+      .catch(function () { previewErr = "无法连接本地服务"; });
+  }
+  function applyState(s) {
+    live = !!(s && s.live);
+    recording = !!(s && s.recording);
+    ready = !!(s && s.ready);
+    startedAt = (s && s.started_at) || 0;
+    var dot = $("h-dot");
+    dot.className = "dot" + (recording ? " rec" : (live ? " live" : ""));
+    if (!ticking) ticking = setInterval(tickState, 1000);
+    tickState();
+    var roomBtn = $("btn-room");
+    if (s && s.room_url) { roomBtn.style.display = ""; roomBtn.onclick = function () { window.open(s.room_url, "_blank"); }; }
+    else { roomBtn.style.display = "none"; }
+
+    if (!s || (s.exists === false && !s.recording)) {
+      // 仅当「不在监控列表且也没在录制」才判为不存在;录制中说明一切正常,
+      // 不因名单缺失(边缘场景)阻断播放
+      destroyHls(); showOverlay("主播不存在", "请检查地址或先到主界面添加该主播");
+      return;
+    }
+    if (!s.enabled) {
+      destroyHls(); showOverlay("实时预览未开启", "在配置中开启 live_preview 后重启服务");
+      return;
+    }
+    var sess = s.session || {};
+    var sessState = sess.active ? (sess.state || "starting") : "absent";
+    if (!recording) {
+      destroyHls();
+      if (live) showOverlay("直播中 · 未在录制", "实时预览随录制启用,点主界面「开始」录制本场");
+      else showOverlay("已下播", "当前没有可预览的画面");
+      return;
+    }
+    // 录制中:确保预览会话在跑(被回收/重启后自愈,失败态立即强试)
+    if (sessState === "absent" || sessState === "failed") {
+      startPreview(sessState === "failed");
+    }
+    if (ready) {
+      if (hlsState === "idle") startHls(s.m3u8);
+      else if (hlsState === "playing") hideOverlay();
+      return;
+    }
+    if (hlsState === "playing") return;   // 会话短暂波动时保持画面,不打断
+    if (sessState === "failed") {
+      showOverlay("预览连接失败",
+                  (sess.error ? "最近错误:" + sess.error + " · " : "") + "点右上角「刷新」重试");
+      return;
+    }
+    if (sessState === "absent" && previewErr) {
+      showOverlay("预览不可用", previewErr);
+      return;
+    }
+    showOverlay(sess.attempt > 0 ? "预览重连中…" : "正在建立预览连接…",
+                "首次约 3~6 秒(打开本页才会拉流,关闭后自动释放)");
+  }
+  function pollState() {
+    fetch("/api/live/" + encodeURIComponent(NAME))
+      .then(function (r) { return r.json(); })
+      .then(applyState)
+      .catch(function () {});
+  }
+
+  /* ── 弹幕/礼物增量轮询 ── */
+  var lastSeq = 0, chatN = 0, giftN = 0, diaN = 0, autoScroll = true;
+
+  feedEl.addEventListener("scroll", function () {
+    var nearBottom = feedEl.scrollHeight - feedEl.scrollTop - feedEl.clientHeight < 40;
+    autoScroll = nearBottom;
+    $("scroll-pill").classList.toggle("show", !nearBottom);
+  });
+  $("scroll-pill").onclick = function () {
+    autoScroll = true;
+    feedEl.scrollTop = feedEl.scrollHeight;
+    $("scroll-pill").classList.remove("show");
+  };
+
+  var giftRowByKey = {}, giftTotalByKey = {};
+
+  function giftRowHtml(text, dia, cls) {
+    return '<div class="' + cls + '">' +
+           '<span class="g-badge">礼</span><span class="txt">' + esc(text) + "</span>" +
+           (dia ? '<span class="dia">' + esc(dia) + " 钻</span>" : "") + "</div>";
+  }
+  function addGiftRow(text, dia, cls, display) {
+    var ph = feedEl.querySelector(".empty");
+    if (ph) ph.remove();
+    var wrap = document.createElement("div");
+    wrap.innerHTML = giftRowHtml(text, dia, cls);
+    var node = wrap.firstChild;
+    if (display && display.lane) node.setAttribute("data-lane", display.lane);
+    feedEl.appendChild(node);
+    while (feedEl.childElementCount > 300) feedEl.removeChild(feedEl.firstChild);
+    if (autoScroll) feedEl.scrollTop = feedEl.scrollHeight;
+    return node;
+  }
+  function updateGiftRow(node, text, dia, cls) {
+    node.className = cls;
+    var t = node.querySelector(".txt");
+    if (t) t.textContent = text;
+    var dEl = node.querySelector(".dia");
+    if (dia) {
+      if (!dEl) {
+        dEl = document.createElement("span");
+        dEl.className = "dia";
+        node.appendChild(dEl);
+      }
+      dEl.textContent = dia + " 钻";
+    } else if (dEl) {
+      dEl.remove();
+    }
+    if (autoScroll) feedEl.scrollTop = feedEl.scrollHeight;
+  }
+
+  function appendNode(html, isGift) {
+    var ph = feedEl.querySelector(".empty");
+    if (ph) ph.remove();
+    var d = document.createElement("div");
+    d.innerHTML = html;
+    feedEl.appendChild(d.firstChild);
+    while (feedEl.childElementCount > 300) feedEl.removeChild(feedEl.firstChild);
+    if (autoScroll) feedEl.scrollTop = feedEl.scrollHeight;
+    if (isGift) { giftN++; $("c-gift").textContent = giftN; }
+  }
+  function renderItem(it) {
+    if (!it || !it.type) return;
+    if (it.type === "chat") {
+      chatN++; $("c-chat").textContent = chatN;
+      appendNode('<div class="dm chat"><span class="who">' + esc(it.user) + '：</span>' +
+                 '<span class="txt">' + esc(it.content) + "</span></div>", false);
+    } else if (it.type === "gift") {
+      /* 展示语义全部由后端 gift_display 给出（文案/车道/优先级/合并键），
+         前端不再判断 98/99、不再拼价格、不再自己合并——规则只有一份。 */
+      var d = it.display || null;
+      var dia = d ? (Number(d.total_diamond) || 0)
+                  : (Number(it.diamond) || 0) * (Number(it.count) || 1);
+      var text = d ? d.text
+                   : ((it.user ? it.user + " 送出了 " : "") +
+                      (it.gift || "?") + " ×" + (it.count || 1));
+      /* 金额按"新总额 − 旧总额"增量累加：full 连击的 count 是累计值，
+         直接按行相加会把同一笔重复计入。 */
+      if (d && d.merge_mode === "full_combo" && giftTotalByKey[d.key] !== undefined) {
+        diaN += dia - giftTotalByKey[d.key];
+      } else {
+        diaN += dia;
+      }
+      if (d && d.key) giftTotalByKey[d.key] = dia;
+      $("c-dia").textContent = diaN;
+      var cls = "dm gift" + (d && d.lane === "slow" ? " big" : "")
+                + (d && d.lane === "slow" ? " slow" : " fast");
+      /* full 连击更新原行，其它情况追加新行；右栏消息不按 hold 删除（可回看） */
+      if (d && d.merge_mode === "full_combo" && giftRowByKey[d.key]) {
+        updateGiftRow(giftRowByKey[d.key], text, dia, cls);
+      } else {
+        var row = addGiftRow(text, dia, cls, d);
+        if (d && d.key) giftRowByKey[d.key] = row;
+      }
+      giftN++; $("c-gift").textContent = giftN;
+      return;                       /* 计数已在上面处理，别让 appendNode 再加一次 */
+    } else if (it.type === "member") {
+      appendNode('<div class="dm member">' + esc(it.user) + " 来了</div>", false);
+    }
+  }
+  function pollDanmaku() {
+    fetch("/api/danmaku/live/" + encodeURIComponent(NAME) + "?after=" + lastSeq)
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && typeof d.seq === "number" && d.seq >= lastSeq) {
+          (d.items || []).forEach(function (it) {
+            if (it.seq && it.seq > lastSeq) lastSeq = it.seq;
+            renderItem(it);
+          });
+        }
+        var fs = $("f-status");
+        if (!d || d.active === false) {
+          fs.textContent = live ? "弹幕线路未连接(未开播或弹幕开关关闭)" : "未开播";
+          fs.style.color = "var(--muted)";
+        } else {
+          fs.textContent = "弹幕线路已连接 · 已收 " + chatN + " 条";
+          fs.style.color = "var(--ok)";
+        }
+      })
+      .catch(function () {});
+  }
+
+  /* ── 定时器(页面隐藏时降频) ── */
+  var stateTimer = null, dmTimer = null;
+  function schedule() {
+    if (stateTimer) clearInterval(stateTimer);
+    if (dmTimer) clearInterval(dmTimer);
+    stateTimer = setInterval(pollState, 3000);
+    dmTimer = setInterval(pollDanmaku, document.hidden ? 4000 : 1500);
+  }
+  document.addEventListener("visibilitychange", function () {
+    schedule();
+    if (!document.hidden) { pollState(); pollDanmaku(); }
+  });
+
+  $("btn-refresh").onclick = function () { refresh(true); };
+  function refresh(manual) {
+    destroyHls();
+    hlsState = "idle";
+    if (manual) { previewErr = ""; startPreview(true); }
+    pollState();
+  }
+  video.addEventListener("volumechange", function () {
+    $("unmute").classList.toggle("show", video.muted);
+  });
+  video.muted = true;
+  $("unmute").classList.add("show");
+  $("unmute").onclick = function () {
+    video.muted = false;
+    video.volume = 1;
+    $("unmute").classList.remove("show");
+  };
+
+  pollState();
+  pollDanmaku();
+  schedule();
+})();
+</script>
+</body>
+</html>

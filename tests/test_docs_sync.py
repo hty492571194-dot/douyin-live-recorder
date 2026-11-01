@@ -123,3 +123,62 @@ class TestDocsSync(_FakeDocMixin, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestLineRefDrift(unittest.TestCase):
+    """`符号(L###)` 与 `xxx.py (N 行)` 的漂移必须被抓住（2026-09-19 新增）。
+
+    为什么值得单独一条:行号/行数是最容易腐烂的引用 —— 改一处代码,后面所有
+    行号全错,而旧行号看起来依然"很具体",比不写更误导。实测说明书里 7 处
+    `符号(L###)` **全部**过期(monitor.py 从 1618 行长到 1821 行,偏移上百行),
+    两个模块行数也各差几十行。
+    """
+
+    def test_real_guide_has_no_line_ref_drift(self):
+        """真实说明书里不能有漂移。"""
+        guide = check_docs_sync._read("项目框架说明书.md") or ""
+        self.assertEqual(check_docs_sync._check_symbol_line_refs(guide), [])
+        self.assertEqual(check_docs_sync._check_module_line_counts(guide), [])
+
+    def test_detects_stale_symbol_line(self):
+        issues = check_docs_sync._check_symbol_line_refs("见 `run_streamer`(L1) 的实现")
+        self.assertEqual(len(issues), 1, issues)
+        self.assertIn("run_streamer", issues[0])
+        self.assertIn("但它在", issues[0])
+
+    def test_accepts_correct_symbol_line(self):
+        hits = check_docs_sync._definitions("run_streamer")
+        self.assertTrue(hits, "run_streamer 应该能找到定义")
+        _f, real = hits[0]
+        issues = check_docs_sync._check_symbol_line_refs("见 `run_streamer`(L%d)" % real)
+        self.assertEqual(issues, [])
+
+    def test_ignores_unknown_symbol(self):
+        """外部库/概念名不该被误报。"""
+        self.assertEqual(
+            check_docs_sync._check_symbol_line_refs("见 `AsyncClient`(L42)"), [])
+
+    def test_ambiguous_symbol_not_reported(self):
+        """同名多处定义时无法判定,宁可放过也不误伤。"""
+        orig = check_docs_sync._definitions
+        check_docs_sync._definitions = lambda name: [("a.py", 10), ("b.py", 99)]
+        try:
+            self.assertEqual(
+                check_docs_sync._check_symbol_line_refs("`dup`(L5)"), [])
+        finally:
+            check_docs_sync._definitions = orig
+
+    def test_detects_wrong_module_line_count(self):
+        issues = check_docs_sync._check_module_line_counts("├── monitor.py   (999 行)")
+        self.assertEqual(len(issues), 1, issues)
+        self.assertIn("monitor.py", issues[0])
+        self.assertIn("999", issues[0])
+
+    def test_accepts_correct_module_line_count(self):
+        with open(os.path.join(BASE, "monitor.py"), encoding="utf-8") as f:
+            real = len(f.read().splitlines())
+        self.assertEqual(
+            check_docs_sync._check_module_line_counts("├── monitor.py   (%d 行)" % real), [])
+
+    def test_ignores_unknown_module(self):
+        self.assertEqual(
+            check_docs_sync._check_module_line_counts("├── nope.py   (1 行)"), [])

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """内嵌 Web UI:参数展示/调整 + 主播状态。"""
 import glob
+import asyncio
 import importlib.util
 import json
 import os
@@ -10,19 +11,101 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote
 
 from preflight import run_checks, find_ffmpeg
 import health as health_mod
 import nas as nas_mod
+import notify as notify_mod      # 告警通道层(礼物诊断测试通知;不依赖 monitor,无循环导入)
 import preview as preview_mod
+import live_hls as live_hls_mod
+import live_preview as live_preview_mod
+import interop as interop_mod     # 跨项目对接层(/api/contract 本机自用;全旁路)
+import incidents                  # 崩溃/故障事件流(左侧导航告警条;不依赖 monitor)
 import link_resolver
 import subtitle as subtitle_mod
+import danmaku as danmaku_mod     # jsonl_for(录制路径→弹幕 jsonl 路径);不依赖 monitor/webui
 import retention as retention_mod
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 INDEX = os.path.join(BASE, "static", "index.html")
+# 补号巡检状态(monitor.rid_backfill_loop 每轮落盘;这里只读)
+RID_STATE_PATH = os.path.join(BASE, "state", "rid_backfill.json")
+
+
+def _giftwatch_records(cfg, limit=200):
+    """礼物诊断快照汇总:扫描全部场次的 .meta/<场次>.giftwatch.jsonl,倒序返回。
+
+    「45 分钟无礼物时自动记录诊断」的产物就是这些文件 —— 这里是它们的查看入口。
+    归档后 .meta 跟着场次搬到 NAS/外接盘,所以三处根目录都要扫;扫描范围严格
+    限定在 _allowed_roots 白名单内(与「打开目录」同一份),不给任意路径读取留口子。
+    """
+    import glob
+    recs = []
+    for root in _allowed_roots(cfg):
+        pattern = os.path.join(root, "*", "*", ".meta", "*.giftwatch.jsonl")
+        for p in glob.glob(pattern):
+            try:
+                with open(p, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            r = json.loads(line)
+                        except Exception:
+                            continue
+                        r["session"] = os.path.basename(p)[: -len(".giftwatch.jsonl")]
+                        r["root"] = os.path.basename(root)
+                        recs.append(r)
+            except OSError:
+                continue
+    recs.sort(key=lambda r: r.get("at") or 0, reverse=True)
+    return {"ok": True, "total": len(recs), "records": recs[:limit]}
+
+
+def _giftwatch_session_records(cfg, output_path):
+    """按场次取礼物诊断记录(历史行展开区「礼物诊断」块的数据源)。
+
+    给录制输出路径推导 .meta/<基名>.giftwatch.jsonl,在白名单三个根目录里
+    定位 —— 场次可能已归档(本机源目录随归档删除),主播/日期两层结构在
+    归档目标里保持不变,所以 glob 一份通吃。找不到 → 空列表而不是报错
+    (前端显示「本场无诊断记录」)。
+    """
+    stem = ""
+    try:
+        stem = os.path.basename(danmaku_mod.jsonl_for(output_path or "") or "")
+    except Exception:
+        stem = ""
+    suffix = ".danmaku.jsonl"
+    if stem.endswith(suffix):
+        stem = stem[: -len(suffix)]
+    if not stem:
+        return {"ok": True, "session": "", "records": []}
+    recs = []
+    for root in _allowed_roots(cfg):
+        pattern = os.path.join(root, "*", "*", ".meta", stem + ".giftwatch.jsonl")
+        for p in glob.glob(pattern):
+            try:
+                with open(p, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            r = json.loads(line)
+                        except Exception:
+                            continue
+                        r["session"] = stem
+                        r["root"] = os.path.basename(root)
+                        recs.append(r)
+            except OSError:
+                continue
+    recs.sort(key=lambda r: r.get("at") or 0, reverse=True)
+    return {"ok": True, "session": stem, "records": recs}
 
 
 def _monitor_live():
@@ -57,6 +140,109 @@ def _history_snapshot(state=None):
     if not hist and state is not None:
         hist = state.get_history()
     return list(hist or [])
+
+
+def _record_windows(cfg):
+    """录制期限快照(monitor.record_windows,纯派生)。
+
+    取不到就返回空结构 —— 前端看到没有该主播的条目就不画徽标,不猜、不自算
+    「剩几天」。今天(TODAY)只由服务端给,浏览器时区/时钟不可信。
+    """
+    mon = _monitor_live()
+    fn = getattr(mon, "record_windows", None) if mon else None
+    if fn is None:
+        return {"today": None, "streamers": {}}
+    try:
+        return fn(cfg)
+    except Exception:
+        return {"today": None, "streamers": {}}
+
+
+def _rid_backfill_status(cfg):
+    """缺号补号巡检的状态快照(给前端画「巡检中/上次/下次/冷却」)。
+
+    读的是 monitor 落的那份 state 文件 —— webui 不能 import monitor(循环依赖),
+    但读同一个文件是安全的。文件不存在 = 从没跑过,返回 running=False 即可。
+    所有字段都缺省成零值:前端拿不到就显示「未启动」,不猜。
+    """
+    import web_rid_probe as probe
+    now = int(time.time())
+    st = probe.empty_state(now)
+    try:
+        with open(RID_STATE_PATH, "r", encoding="utf-8") as f:
+            st = probe.merge_state(json.load(f), now)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+    norm = probe.normalize_cfg((cfg or {}).get("rid_backfill") or {})
+    pending = [str(m.get("name") or "") for m in probe.pending_monitors(cfg or {})]
+    until = int(st.get("window_until") or 0)
+    cu = int((st.get("circuit") or {}).get("global_until") or 0)
+    enabled = norm.get("enabled")
+    running = bool(pending) and (enabled is True or until > now)
+    return {
+        "enabled": enabled if enabled != "auto" else "auto",
+        "running": running,
+        "reason": st.get("last_reason") or "",
+        "window_start": int(st.get("window_start") or 0),
+        "window_until": until,
+        "pending": pending,
+        "checks_today": int(st.get("checks_today") or 0),
+        "max_checks_per_day": norm.get("max_checks_per_day"),
+        "last_run_at": int(st.get("last_run_at") or 0),
+        "next_run_at": int(st.get("next_run_at") or 0),
+        "last_result": st.get("last_result") or {},
+        "stats": st.get("stats") or {},
+        "circuit": {"global_until": cu,
+                    "reason": (st.get("circuit") or {}).get("reason") or "",
+                    "cooldown_today": int((st.get("circuit") or {}).get("cooldown_today") or 0),
+                    "cooling": cu > now},
+        "per_monitor": {k: {"last_check": int(v.get("last_check") or 0),
+                            "verdict": v.get("verdict") or "",
+                            "reason": v.get("last_reason") or "",
+                            "fails": int(v.get("fails") or 0),
+                            "backoff_until": int(v.get("backoff_until") or 0)}
+                        for k, v in (st.get("per_monitor") or {}).items()
+                        if isinstance(v, dict)},
+    }
+
+
+def _num_plain(value):
+    """配置值 → 数值;无法解析返回 None(布尔一律视为非法:True 不是 1)。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _num_kbps(value):
+    """码率配置 → kbps 数值;支持 `1200` / `"1200"` / `"3000k"` / `"3M"`。
+
+    单位口径必须与 `monitor._norm_bitrate` 一致:那边拼给 ffmpeg,这边做范围
+    校验。两处若各解释一遍,就会出现「校验通过但 ffmpeg 收到看不懂的值」。
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip().lower()
+    if not s:
+        return None
+    mult = 1.0
+    if s.endswith("k"):
+        s, mult = s[:-1], 1.0
+    elif s.endswith("m"):
+        s, mult = s[:-1], 1000.0
+    try:
+        return float(s) * mult
+    except ValueError:
+        return None
 
 
 class State:
@@ -98,6 +284,25 @@ class State:
         self.history = []  # 录制历史(由 monitor 写入)
         self.rec_ctrl = None  # {stop, start} 录制手动控制回调(由 monitor 注入)
         self.cookie_guard = None  # Cookie 使用护栏(由 monitor 注入,界面只读统计)
+        # 画质调度快照(由 monitor._quality_loop 每 5 s 刷新)+ 控制回调
+        self.quality_status = {}
+        self.quality_ctrl = None  # {"unlock": fn}(解除抖动锁定)
+
+    def set_quality_status(self, status):
+        with self.lock:
+            self.quality_status = json.loads(json.dumps(status or {}))
+
+    def get_quality_status(self):
+        with self.lock:
+            return json.loads(json.dumps(self.quality_status or {}))
+
+    def set_quality_ctrl(self, ctrl):
+        with self.lock:
+            self.quality_ctrl = ctrl
+
+    def get_quality_ctrl(self):
+        with self.lock:
+            return self.quality_ctrl
 
     def set_rec_ctrl(self, ctrl):
         with self.lock:
@@ -157,6 +362,25 @@ class State:
                     return "monitors: 每一项必须是对象"
                 if "auto_record" in m and not isinstance(m["auto_record"], bool):
                     return "monitors.auto_record: 必须是布尔值"
+                # ── 录制期限(短期录制主播;2026-10-22)──
+                # 校验比 UI 宽:UI 只给 1/3/7,后端收 1..365,以后加「30 天」
+                # 只改前端。这里必须挡住非法值:record_until 坏了会让到期判定
+                # 永远走 missing_until(表现为「主播永远不录」,且毫无提示)。
+                if "record_mode" in m and m["record_mode"] not in ("long", "short", "paused"):
+                    return "monitors.record_mode: 只能是 long / short / paused"
+                if "record_days" in m and m["record_days"] not in (None, ""):
+                    d = m["record_days"]
+                    if isinstance(d, bool) or not isinstance(d, (int, float)) or \
+                            int(d) != d or not (1 <= int(d) <= 365):
+                        return "monitors.record_days: 必须是 1~365 的整数"
+                if "record_until" in m and m["record_until"] not in (None, ""):
+                    try:
+                        date.fromisoformat(str(m["record_until"]).strip())
+                    except ValueError:
+                        return "monitors.record_until: 必须是 YYYY-MM-DD"
+                if m.get("record_mode") == "short" and \
+                        not str(m.get("record_until") or "").strip():
+                    return "monitors: record_mode=short 必须同时给出 record_until"
                 if "note" in m:
                     if not isinstance(m["note"], str):
                         return "monitors.note: 必须是字符串"
@@ -207,10 +431,149 @@ class State:
                         return f"danmaku.{k}: 取值范围 {lo} ~ {hi}"
             if "style" in dm and dm["style"] not in ("queue", "scroll"):
                 return "danmaku.style: 只能是 queue 或 scroll"
+        if "recorder" in patch:
+            rec = patch["recorder"]
+            if not isinstance(rec, dict):
+                return "recorder: 必须是对象"
+            # format 白名单:界面已是下拉,这里挡住 API 直调/手改配置的拼错
+            # (拼错会让 ffmpeg 启动即失败,表现为「检测到开播却录不到文件」)
+            fmt = rec.get("format")
+            if fmt is not None and fmt not in ("flv", "mp4", "ts"):
+                return "recorder.format: 只能是 flv / mp4 / ts 之一"
+            prep = rec.get("preset")
+            if prep not in (None, ""):
+                # preset 白名单单一真源在 monitor.X264_PRESETS(函数内延迟 import,
+                # 避免与 monitor 顶层 `from webui import ...` 形成模块级循环)
+                try:
+                    from monitor import X264_PRESETS as _presets
+                except Exception:
+                    _presets = ()
+                if _presets and str(prep).strip().lower() not in _presets:
+                    return "recorder.preset: 非法值(仅支持 libx264 各档 preset)"
+            # 录制暂存目录(2026-10-30):保存时就挡住非法路径 —— 校验放在这里
+            # 而不是等起录,是因为「写到项目里」在这条链路上是不可见的:
+            # 用户只会看到录制正常,几个月后发现项目涨到几百 G。
+            od = rec.get("output_dir")
+            if od is not None and not isinstance(od, str):
+                return "recorder.output_dir: 必须是字符串路径"
+            if isinstance(od, str) and od.strip():
+                err = self._validate_stage_dir(od.strip())
+                if err:
+                    return err
+            sw = rec.get("output_dir_switch")
+            if sw not in (None, "", "next_session", "now"):
+                return "recorder.output_dir_switch: 只能是 next_session / now"
+            err = self._validate_recorder_quality(rec)
+            if err:
+                return err
+        return None
+
+    def _validate_stage_dir(self, raw):
+        """暂存目录校验:绝对路径 + 不在项目内 + 上级目录存在可写。
+
+        不在这里建目录 —— 校验阶段不该有副作用(用户可能只是点了下保存又改回去)。
+        真正建目录在 monitor.set_stage_dir 里做,失败会把配置回滚。
+        """
+        p = os.path.expanduser(raw)
+        if not os.path.isabs(p):
+            return "recorder.output_dir: 必须是绝对路径(或以 ~/ 开头)"
+        real = os.path.realpath(p)
+        base = os.path.realpath(BASE)
+        if real == base or real.startswith(base + os.sep):
+            return ("recorder.output_dir: 不能放在项目文件夹内"
+                    "(项目只存系统文件;录制视频请指向项目外目录,"
+                    "默认 ~/Movies/DouyinRecordings)")
+        if os.path.exists(real) and not os.path.isdir(real):
+            return f"recorder.output_dir: 同名文件已存在,不是目录({real})"
+        parent = os.path.dirname(real) or "/"
+        # 允许最后一级不存在(新建目录),但父目录必须在
+        while parent and not os.path.exists(parent):
+            nxt = os.path.dirname(parent)
+            if nxt == parent:
+                break
+            parent = nxt
+        if not os.path.isdir(parent):
+            return f"recorder.output_dir: 上级目录不存在({parent})"
+        if not os.access(parent, os.W_OK):
+            return f"recorder.output_dir: 上级目录不可写({parent})"
+        return None
+
+    # 画质调度相关配置项:字段 -> (类型, 下限, 上限)
+    # 与 monitor.DEFAULT_CONFIG["recorder"] 一一对应(前端高级参数页分组表同源)。
+    _RECORDER_RULES = {
+        "degrade_cpu": ("数值", 60, 99),
+        "degrade_engine": ("数值", 60, 99),
+        "degrade_recover": ("数值", 30, 90),
+        "degrade_hold": ("数值", 10, 600),
+        "degrade_recover_hold": ("数值", 60, 3600),
+        "degrade_min_gap": ("数值", 60, 7200),
+        "degrade_max_restore": ("整数", 0, 50),
+        "degrade_max_switches": ("整数", 1, 50),
+        "min_gain": ("数值", 0, 50),
+        "max_hw_streams": ("整数", 1, 12),
+        "bitrate": ("数值", 0, 6000),
+    }
+    _VIDEO_MODES = ("vt", "sw", "copy")
+    _TIERS = (0, 1080, 864, 720)
+
+    def _validate_recorder_quality(self, rec):
+        """校验编码路线 / 档位 / 码率 / 降级六键与阈值。返回错误串或 None。
+
+        为什么这些必须在保存时就挡住:档位非法 → `-vf` 参数错误 → ffmpeg
+        启动即退出(表现成「开播却录不到文件」);编码路线非法 → 同上;
+        降级档非法 → 触发时静默跳过,用户以为开着其实没开。
+        """
+        mode = rec.get("video_mode")
+        if mode not in (None, "") and str(mode).strip().lower() not in self._VIDEO_MODES:
+            return "recorder.video_mode: 只能是 vt(硬编)/ sw(软编)/ copy(流复制)"
+        for key in ("hw_decode", "force_hw", "auto_degrade"):
+            if key in rec and not isinstance(rec[key], bool):
+                return f"recorder.{key}: 必须是布尔值"
+        for key in ("resolution", "degrade_l1_resolution", "degrade_l2_resolution"):
+            if key not in rec or rec[key] in (None, ""):
+                continue
+            try:
+                tier = int(str(rec[key]).strip())
+            except (TypeError, ValueError):
+                return f"recorder.{key}: 必须是 0 / 1080 / 864 / 720 之一"
+            if tier not in self._TIERS:
+                return (f"recorder.{key}: 只能是 0(原生)/ 1080 / 864 / 720,"
+                        f"收到 {rec[key]!r}(非法值会让 ffmpeg 起不来)")
+        for key, (kind, lo, hi) in self._RECORDER_RULES.items():
+            if key not in rec or rec[key] in (None, ""):
+                continue
+            num = _num_kbps(rec[key]) if key == "bitrate" else _num_plain(rec[key])
+            if num is None:
+                return f"recorder.{key}: 必须是数值"
+            if kind == "整数" and not float(num).is_integer():
+                return f"recorder.{key}: 必须是整数"
+            if num < lo or num > hi:
+                return f"recorder.{key}: 取值范围 {lo} ~ {hi}"
+        if "degrade_recover" in rec and "degrade_cpu" in rec:
+            try:
+                if float(rec["degrade_recover"]) >= float(rec["degrade_cpu"]):
+                    return ("recorder.degrade_recover: 必须小于 degrade_cpu"
+                            "(否则没有滞回,会在临界点反复切档)")
+            except (TypeError, ValueError):
+                pass
+        # 单调性(第 1 层):L2 被 L1 双维支配时整条降级链没意义
+        try:
+            from quality import validate_levels as _vl
+            err = _vl({"recorder": {**self.config.get("recorder", {}), **rec}})
+        except Exception:
+            err = None
+        if err:
+            return err
         return None
 
     def update_config(self, patch: dict):
-        """合并更新配置并校验落盘;返回契约 §2 结构。"""
+        """合并更新配置并校验落盘;返回契约 §2 结构。
+
+        暂存目录切换是**重活**(要重开 ffmpeg),一律放到锁外做:若整段都在
+        `self.lock` 里,3 秒一次的 /api/status 轮询会被卡住好几秒,前端表现为
+        整页发僵。所以这里只记「变更前后」,保存完出了锁再切。
+        """
+        stage_req = None
         with self.lock:
             err = self._validate(patch)
             if err:
@@ -223,6 +586,9 @@ class State:
                 if ("host" in new and new["host"] != old.get("host")) or \
                         ("port" in new and new["port"] != old.get("port")):
                     restart_required = True
+
+            # 暂存目录变更:在合并前记下旧值,合并后算是否需要切换
+            old_out = str(((self.config.get("recorder") or {}).get("output_dir")) or "")
 
             monitors_changed = False
             if "monitors" in patch:
@@ -252,6 +618,11 @@ class State:
                     self.config[k] = v
 
             self._save()
+            new_out = str(((self.config.get("recorder") or {}).get("output_dir")) or "")
+            if "recorder" in patch:
+                stage_req = (old_out, new_out,
+                             str(((self.config.get("recorder") or {})
+                                  .get("output_dir_switch")) or "next_session"))
             if monitors_changed:
                 self.monitors_version += 1
                 # 事件触发:主播刚被删掉就登记进孤儿台账,让 30 天冷静期从
@@ -269,7 +640,26 @@ class State:
                     self.cookie_guard.configure(self.config)
                 except Exception:
                     pass
-            return {"ok": True, "error": None, "restart_required": restart_required}
+
+        # ── 锁外:暂存目录真的变了才切换 ──
+        if stage_req and stage_req[1] != stage_req[0]:
+            old_out, new_out, policy = stage_req
+            sw = None
+            try:
+                import monitor as mon          # 延迟 import:monitor 顶层 import webui
+                sw = mon.set_stage_dir(self, new_out, now=(policy == "now"))
+            except Exception as e:             # noqa: BLE001
+                sw = {"ok": False, "error": f"切换暂存目录失败:{e}"}
+            if sw and not sw.get("ok"):
+                # 回滚:配置里绝不留一个建不出来/不可写的暂存路径
+                with self.lock:
+                    self.config.setdefault("recorder", {})["output_dir"] = old_out
+                    self._save()
+                return {"ok": False, "error": sw.get("error"),
+                        "restart_required": False}
+            return {"ok": True, "error": None, "restart_required": restart_required,
+                    "stage_switch": sw}
+        return {"ok": True, "error": None, "restart_required": restart_required}
 
     def set_cookie_guard(self, guard):
         """注入 Cookie 护栏实例(由 monitor.main 调用)。
@@ -308,6 +698,11 @@ class State:
         with self.lock:
             self.streamers[name] = snap
 
+    def get_streamers(self):
+        """只取主播状态快照(录制看护循环每 20s 用,不必连 config/commands 一起深拷)。"""
+        with self.lock:
+            return json.loads(json.dumps(self.streamers))
+
     def remove_streamer(self, name):
         with self.lock:
             self.streamers.pop(name, None)
@@ -333,18 +728,30 @@ class State:
                 "recordings": json.loads(json.dumps(self.recordings)),
                 "commands": json.loads(json.dumps(self.commands)),
                 "nas": json.loads(json.dumps(self.nas_status)),
+                # 画质调度:当前档位 / 引擎占用 / 降级是否生效(纯展示,不参与判定)
+                "quality": json.loads(json.dumps(self.quality_status or {})),
             }
 
 
 def _allowed_roots(cfg):
-    """允许打开的根目录白名单:录制目录 + NAS 挂载点 + 外接硬盘目录。
+    """允许打开的根目录白名单:录制暂存根 + 项目元数据目录 + NAS 挂载点 + 外接盘。
 
-    放宽原因:归档后文件已不在录制目录,需要能打开归档目标中的文件。
-    仍严格限制在这三处,防止任意路径打开。
+    2026-10-30 暂存外迁后本函数要覆盖**两个**录制根:
+      · 当前暂存根(recorder.output_dir,空=默认 ~/Movies/DouyinRecordings);
+      · 项目内 recordings/(迁移前的老场次仍在这里,不加就会被 403,
+        历史页表现为「文件不存在」—— 素材其实还在)。
+    仍严格限制在这几处,防止任意路径打开。
     """
     roots = []
-    out = (cfg.get("recorder") or {}).get("output_dir", "") or os.path.join(BASE, "recordings")
-    roots.append(os.path.realpath(os.path.expanduser(out)))
+    try:
+        import monitor as mon                  # 延迟 import:避免与 monitor 循环导入
+        roots.append(mon._resolve_output_dir(cfg))
+        roots.append(mon.DEFAULT_STAGE_DIR)
+    except Exception:                          # noqa: BLE001
+        out = (cfg.get("recorder") or {}).get("output_dir", "") or ""
+        roots.append(os.path.realpath(os.path.expanduser(out))
+                     if out else os.path.join(BASE, "recordings"))
+    roots.append(os.path.realpath(os.path.join(BASE, "recordings")))   # 老场次
     nas_cfg = cfg.get("nas") or {}
     if nas_cfg.get("enabled", False):
         mp = nas_cfg.get("mount_point") or "~/DouyinArchive"
@@ -352,7 +759,12 @@ def _allowed_roots(cfg):
     ext = ((cfg.get("archive") or {}).get("external_dir") or "").strip()
     if ext:
         roots.append(os.path.realpath(os.path.expanduser(ext)))
-    return [r for r in roots if r]
+    seen, uniq = set(), []
+    for r in roots:
+        if r and r not in seen:
+            seen.add(r)
+            uniq.append(r)
+    return uniq
 
 
 # ── 项目指引:可跳转的目录清单 ──
@@ -366,8 +778,10 @@ GUIDE_FOLDERS = [
          "desc": "monitor-日期.log 按天轮转,开播/录制/归档全记录"},
         {"key": "previews", "name": "主播头像截图目录", "rel": "previews",
          "desc": "按主播分目录,主播卡片头像取自这里"},
-        {"key": "recordings", "name": "录制暂存目录", "rel": "recordings",
-         "desc": "flv 成片与 ass 弹幕,下播后自动归档到 NAS"},
+        {"key": "recordings", "name": "元数据目录", "rel": "recordings",
+         "desc": "只放 history.json 与字幕备份包(KB 级);录制视频不再写进项目"},
+        {"key": "stage", "name": "录制暂存目录", "dynamic": "stage",
+         "desc": "flv 成片与 ass 弹幕写在这里,下播后自动归档到 NAS(设置里可改)"},
         {"key": "spool", "name": "归档队列目录", "rel": "spool",
          "desc": "待归档任务 pending.json,正常情况为空"},
         {"key": "auth", "name": "登录状态目录", "rel": "auth",
@@ -402,6 +816,15 @@ def _guide_path(item, cfg):
         return os.path.realpath(os.path.join(mp, rd) if rd else mp)
     if kind == "launchagents":
         return os.path.realpath(os.path.expanduser("~/Library/LaunchAgents"))
+    if kind == "stage":
+        # 录制暂存根:唯一真源在 monitor._resolve_output_dir(空=默认根;
+        # 落在项目内会被拒绝并回落),这里绝不自算一份,否则两边必然漂移。
+        try:
+            import monitor as mon
+            return os.path.realpath(mon._resolve_output_dir(cfg))
+        except Exception:                      # noqa: BLE001
+            out = (cfg.get("recorder") or {}).get("output_dir") or ""
+            return os.path.realpath(os.path.expanduser(out)) if out else ""
     return ""
 
 
@@ -476,6 +899,222 @@ def _nas_mounted(cfg, ttl=_MOUNT_TTL):
     return val
 
 
+# ── 目录列举缓存(2026-10-26)──────────────────────────────────────
+# 背景:/api/history 曾对 500 条历史逐条做 6 次 os.path.exists 判存在性,而
+# 493 条是归档条目、全在 NAS 上,每条又指向不同日期目录(冷路径)。实测单次
+# 请求 43 秒(archived 条目 304ms/条,本机条目仅 11ms/条),而前端 5 秒轮询
+# 一次且当时没有并发守卫 —— 请求无限堆积占满浏览器 6 条同源连接,整个 WebUI
+# 连「解析」按钮都点不动,服务端却是空闲的。
+#
+# 做法:同一目录只 scandir 一次拿到文件名集合,后续全是内存查找。实测 491 条
+# 归档条目去重后只有 78 个目录(约 6.3 条/目录),2946 次 SMB 往返 → 78 次。
+#
+# 三态语义(与前端「✗ 缺失 / ? 无法确认」一一对应,不能混):
+#   _DIR_OK      目录可读,用 names 判成员
+#   _DIR_MISSING 目录确实不存在 → 里面的文件一律 False(前端显示缺失)
+#   _DIR_UNKNOWN 探测不了(未挂载/网络异常) → None(前端显示「无法确认」)
+# 🔴 绝不能把 MISSING 当 UNKNOWN 返回,否则已删除的归档会被显示成「未挂载」。
+_DIR_OK, _DIR_MISSING, _DIR_UNKNOWN = "ok", "missing", "unknown"
+_DIR_CACHE = {}          # abspath -> (ts, state, frozenset)
+# TTL 2026-10-31 从 60 s 提到 300 s:一轮「预热 + 当页探测」在真冷 SMB 上
+# 要十几秒,60 s 的窗口意味着一轮还没跑完、开头扫过的目录就已过期,等于白扫
+# (_history_payload 会再扫一遍)。目录存在性是分钟级甚至天级变化的东西。
+# 注意 TTL 长短不再影响响应速度 —— _history_payload 走 stale-while-revalidate,
+# 过期时先把旧值返回、后台再刷新;这里只决定「数据最多能旧多久」。
+# 真要立即失效有 _dir_cache_clear()(归档/删除后调用)。
+_DIR_TTL = 300.0
+_DIR_CACHE_MAX = 400
+_DIR_LOCK = threading.Lock()
+
+
+# ── 单轮探测预算(2026-10-31)──────────────────────────────────────
+# 目录探测的最小单位是一次 SMB scandir。macOS smbfs 是单会话串行的:代码里
+# 并发 6 个线程,实测吞吐仍只有约 2 个目录/秒,真冷时 0.5~1 s/目录。
+# 500 条历史去重后 204 个目录 ⇒ 单轮 100~200 秒(线上实测 /api/history
+# 165 s / 194 s,期间只算不传,TTFB 就是 165 s)。
+# 所以每轮给一个硬预算:预算耗尽后不再真打 SMB,一律返回 _DIR_UNKNOWN
+# (前端显示「? 无法确认」),下一轮再补。宁可显示「?」,也不能把整页拖到
+# 三分钟 —— 那才是用户说的「点一下要转半天」。
+_PROBE = threading.local()
+
+
+class _ProbeBudget:
+    """一轮请求内的探测预算:deadline + 是否已耗尽。"""
+
+    def __init__(self, seconds):
+        self.deadline = time.time() + max(0.0, float(seconds))
+        self.exhausted = False
+
+    def spend(self):
+        """还有预算 → True;已耗尽 → 置位并 False(调用方必须短路,不再打 SMB)。"""
+        if self.exhausted:
+            return False
+        if time.time() >= self.deadline:
+            self.exhausted = True
+            return False
+        return True
+
+
+def _probe_budget(seconds=None):
+    """读/装当前线程的探测预算。
+
+    无参调用返回当前预算(_ProbeBudget 或 None);传秒数则新建并挂到当前线程,
+    返回**旧值**供调用方在 finally 里恢复(嵌套调用不会互相踩)。
+    """
+    if seconds is None:
+        return getattr(_PROBE, "budget", None)
+    old = getattr(_PROBE, "budget", None)
+    _PROBE.budget = _ProbeBudget(seconds)
+    return old
+
+
+def _probe_budget_restore(old):
+    """恢复 _probe_budget(seconds) 返回的旧值。"""
+    _PROBE.budget = old
+
+
+def _dir_listing(path, ttl=None):
+    """列举目录内容,返回 (state, names)。结果按 ttl 秒缓存(默认 _DIR_TTL)。
+
+    服务是每请求一线程(ThreadingHTTPServer),缓存写入必须加锁;scandir 本身
+    放在锁外做 —— NAS 慢的时候不能把别的线程一起堵在锁上。
+    """
+    if not path:
+        return _DIR_UNKNOWN, frozenset()
+    try:
+        key = os.path.abspath(path)
+    except (OSError, ValueError):
+        return _DIR_UNKNOWN, frozenset()
+    ttl = _DIR_TTL if ttl is None else ttl
+    now = time.time()
+    if ttl > 0:
+        hit = _DIR_CACHE.get(key)          # 只读单键:不需锁,写才加锁
+        if hit and now - hit[0] < ttl:
+            return hit[1], hit[2]
+    # 预算耗尽:不再真打 SMB。返回 UNKNOWN(不是 MISSING)—— 语义必须是
+    # 「没确认」,否则前端会把还没探测的条目显示成「文件已缺失」。
+    budget = getattr(_PROBE, "budget", None)
+    if budget is not None and not budget.spend():
+        return _DIR_UNKNOWN, frozenset()
+    try:
+        with os.scandir(key) as it:
+            names = frozenset(e.name for e in it)
+        state = _DIR_OK
+    except (FileNotFoundError, NotADirectoryError):
+        state, names = _DIR_MISSING, frozenset()
+    except OSError:
+        state, names = _DIR_UNKNOWN, frozenset()
+    # 🔴 UNKNOWN 不进缓存(2026-10-31):它表示「这次没探到」(NAS 断开、预算
+    # 耗尽、瞬时错误),不是目录的真实状态。原来照缓不误,配合 TTL 60 s 会
+    # 让一次抖动把该目录锁成「无法确认」整整一分钟;TTL 提到 180 s 后更糟。
+    # 不缓存 → 下一轮立刻重试,探到了就恢复真实状态。
+    if state != _DIR_UNKNOWN:
+        with _DIR_LOCK:
+            if len(_DIR_CACHE) >= _DIR_CACHE_MAX:
+                live = {k: v for k, v in _DIR_CACHE.items() if now - v[0] < ttl}
+                _DIR_CACHE.clear()
+                _DIR_CACHE.update(live)
+                if len(_DIR_CACHE) >= _DIR_CACHE_MAX:
+                    _DIR_CACHE.clear()     # 目录名一直在变:清空最省事
+            _DIR_CACHE[key] = (now, state, names)
+    return state, names
+
+
+def _dir_cache_clear():
+    """清空目录/条目文件/素材缺失记忆。归档完成、删除历史后调用。
+
+    三个缓存必须一起清:只清目录缓存的话,条目级结论(_history_files 的
+    files dict,含 *_exists)还会按 180 s 的 TTL 继续给旧答案,归档完的
+    条目仍显示「本机路径」;而「素材确认不存在」的记忆会让刚归档过来的
+    素材继续被跳过 7 天。
+    """
+    with _DIR_LOCK:
+        _DIR_CACHE.clear()
+    _files_cache_clear()
+    _absent_cache_clear()
+
+
+def _has_entry_file(d, subdir, name):
+    """d/subdir/name 是否存在。走 _dir_listing 缓存,避免逐条打 NAS。
+
+    ⚠️ 只回答「确定存在」;缓存拿不到状态(未挂载/异常)时返回 False,与
+    _history_files 的 None 语义不同 —— 这里的调用方都只需要「能不能读到」。
+    """
+    base = os.path.join(d, subdir) if subdir else d
+    state, names = _dir_listing(base)
+    return state == _DIR_OK and name in names
+
+
+def _entry_root(entry):
+    """一个历史条目当前实际所在的目录(归档后切到归档目标)。
+
+    🔴 唯一真源:_history_files 与 _prefetch_paths 都必须用它推导 root,
+    否则预热的目录和实际探测的目录会对不上,缓存等于白做。
+    """
+    out = entry.get("output_path") or ""
+    if not out:
+        return None
+    arch = entry.get("archive") or {}
+    if arch.get("state") == "archived":
+        return arch.get("dest") or os.path.dirname(out)
+    return os.path.dirname(out)
+
+
+def _prefetch_dirs(paths, workers=6, budget=None):
+    """并发预热目录缓存(纯提速,任何失败都不影响结果)。
+
+    冷启动要列举上百个目录,串行在 SMB 上实测 8~13 秒;并发 6 只在**内核目录
+    缓存还热**时是 1~2 秒 —— 真冷(线上常态)时 smbfs 单会话串行,并发几乎
+    不加速,实测吞吐约 2 个/秒。所以这里必须接受一个 budget:预算耗尽后
+    worker 里的 _dir_listing 立刻返回 UNKNOWN,不再打 SMB,整个预取迅速收尾。
+    每个 _dir_listing 自己吞掉 OSError,单个目录失败不会中断预取。
+    """
+    todo = [p for p in dict.fromkeys(paths) if p]
+
+    def _scan(p):
+        # 预算是 thread-local 的:worker 线程必须自己挂上,否则它读不到
+        # 主线程的 budget,会绕过上限一路打满 SMB。
+        if budget is None:
+            _dir_listing(p)
+            return
+        old = _probe_budget_restore(budget)
+        try:
+            _dir_listing(p)
+        finally:
+            _probe_budget_restore(old)
+
+    if len(todo) < 2:
+        for p in todo:
+            _scan(p)
+        return
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            list(ex.map(_scan, todo))
+    except Exception:                    # 线程池都起不来:退回串行,别让页面挂掉
+        for p in todo:
+            _scan(p)
+
+
+def _prefetch_paths(entries, cfg):
+    """收集本轮要探测的目录(root 与 root/.meta)供预热。
+
+    NAS 未挂载时跳过归档目录 —— 与 _history_files 里 probe 短路同一个考虑:
+    挂载点不可达时不做任何 SMB 探测。
+    """
+    nas_ok = _nas_mounted(cfg)
+    out = []
+    for e in entries:
+        arch = e.get("archive") or {}
+        if arch.get("state") == "archived" and not nas_ok:
+            continue
+        r = _entry_root(e)
+        if not r:
+            continue
+        out.append(r)
+        out.append(os.path.join(r, ".meta"))
+    return out
+
+
 def _history_files(entry, cfg):
     """计算一场录制各文件的**当前实际位置**(随归档状态自动切换本机/归档目标)。
 
@@ -486,6 +1125,8 @@ def _history_files(entry, cfg):
       jsonl    弹幕礼物事件流
       align    时间戳对齐元数据
       location local|archive(供前端显示"存在哪")
+
+    *_exists 三态:True=在 / False=确实没有 / None=无法确认(未挂载等)。
     """
     out = entry.get("output_path") or ""
     if not out:
@@ -503,34 +1144,232 @@ def _history_files(entry, cfg):
             stem = stem[:-4]
     arch = entry.get("archive") or {}
     archived = arch.get("state") == "archived"
-    root = (arch.get("dest") or src_dir) if archived else src_dir
+    root = _entry_root(entry) or src_dir      # 与 _prefetch_paths 共用同一推导
     ext = os.path.splitext(base)[1] or ".flv"
     # 存在性:归档目标未挂载时不做 stat(避免 SMB 长时间阻塞),标记 None=未知
     probe = (not archived) or _nas_mounted(cfg) or os.path.isdir(root)
 
-    def _ex(p):
-        if not probe:
-            return None
-        try:
-            return os.path.exists(p)
-        except OSError:
-            return False
+    # 一次 scandir 取代原来 6 次 os.path.exists:归档条目全在 NAS 上,每次
+    # exists 都是一趟 SMB 往返(见 _dir_listing 顶部说明)。
+    if probe:
+        root_state, root_names = _dir_listing(root)
+    else:
+        root_state, root_names = _DIR_UNKNOWN, frozenset()
+    # .meta 不在 root 里就不必再多跑一趟;此时 jsonl/align 必然不存在
+    if root_state == _DIR_OK and ".meta" in root_names:
+        meta_state, meta_names = _dir_listing(os.path.join(root, ".meta"))
+    else:
+        meta_state, meta_names = root_state, frozenset()
+
+    def _in(name, state, names):
+        if state == _DIR_OK:
+            return name in names
+        return False if state == _DIR_MISSING else None
+
+    def _is_dir(state):
+        return True if state == _DIR_OK else (
+            False if state == _DIR_MISSING else None)
 
     video_p = os.path.join(root, base)
     meta_p = os.path.join(root, ".meta")
+    ass_name = stem + "-000" + ".ass"
+    jsonl_name = stem + ".danmaku.jsonl"
+    align_name = stem + ".align.json"
     return {
-        "video": video_p, "video_exists": _ex(os.path.dirname(video_p)),
-        "ass": os.path.join(root, stem + "-000" + ".ass"),
-        "ass_exists": _ex(os.path.join(root, stem + "-000" + ".ass")),
-        "meta_dir": meta_p, "meta_exists": _ex(meta_p),
-        "jsonl": os.path.join(root, ".meta", stem + ".danmaku.jsonl"),
-        "jsonl_exists": _ex(os.path.join(root, ".meta", stem + ".danmaku.jsonl")),
-        "align": os.path.join(root, ".meta", stem + ".align.json"),
-        "align_exists": _ex(os.path.join(root, ".meta", stem + ".align.json")),
-        "dir": root, "dir_exists": _ex(root),
+        "video": video_p, "video_exists": _is_dir(root_state),
+        "ass": os.path.join(root, ass_name),
+        "ass_exists": _in(ass_name, root_state, root_names),
+        "meta_dir": meta_p, "meta_exists": _in(".meta", root_state, root_names),
+        "jsonl": os.path.join(root, ".meta", jsonl_name),
+        "jsonl_exists": _in(jsonl_name, meta_state, meta_names),
+        "align": os.path.join(root, ".meta", align_name),
+        "align_exists": _in(align_name, meta_state, meta_names),
+        "dir": root, "dir_exists": _is_dir(root_state),
         "location": "archive" if archived else "local",
         "ext": ext,
     }
+
+
+# ── 条目级 files 缓存(2026-10-31)────────────────────────────────
+# _dir_listing 缓存的是「目录里有什么」,这里缓存「一条历史算完的结论」
+# (_history_files 的 files dict)。分开的理由:同一页翻走再翻回来、以及
+# 5 秒轮询,都不该重算一遍三态判断;而目录缓存失效时这里也要跟着清。
+# TTL 与 _DIR_TTL 对齐:归档状态或目标一变 key 就变了(_files_key 含 dest),
+# 所以这里只需要管「文件被人在 NAS 上手工删掉」这种低频变化。
+_FILES_TTL = 300.0
+_FILES_CACHE = {}                     # (output_path, state, dest) -> (ts, files)
+_FILES_CACHE_MAX = 1200
+_FILES_LOCK = threading.Lock()
+
+
+def _files_cache_clear():
+    with _FILES_LOCK:
+        _FILES_CACHE.clear()
+
+
+def _files_key(entry):
+    """条目缓存键。归档状态或目标变了就是另一条结论,必须换 key。"""
+    arch = entry.get("archive") or {}
+    return (entry.get("output_path") or "", arch.get("state"), arch.get("dest"))
+
+
+def _history_files_cached(entry, cfg, ttl=None):
+    """_history_files 的条目级缓存版本。"""
+    ttl = _FILES_TTL if ttl is None else ttl
+    key = _files_key(entry)
+    now = time.time()
+    if ttl > 0:
+        hit = _FILES_CACHE.get(key)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+    files = _history_files(entry, cfg)
+    with _FILES_LOCK:
+        if len(_FILES_CACHE) >= _FILES_CACHE_MAX:
+            live = {k: v for k, v in _FILES_CACHE.items() if now - v[0] < ttl}
+            _FILES_CACHE.clear()
+            _FILES_CACHE.update(live)
+            if len(_FILES_CACHE) >= _FILES_CACHE_MAX:
+                _FILES_CACHE.clear()
+        _FILES_CACHE[key] = (now, files)
+    return files
+
+
+# ── /api/history 结果缓存与分页(2026-10-26 建,2026-10-31 重写)──────
+# 2026-10-26 的版本是「整份 payload 缓存 5 秒 + 单飞」,但没有解决根本问题:
+# 它每轮仍然要对**全部** 500 条历史逐条判文件存在性,而 498 条在 SMB 上,
+# 去重后 204 个目录、smbfs 真冷时约 2 目录/秒 ⇒ 单轮 100~200 秒(线上实测
+# 165 s / 194 s,TTFB 就是全部,传输只占 0.01 s)。前端 20 秒超时 < 这个数,
+# 于是**每次点进历史页都必然超时重来**,用户感受就是「一直转、非常忙」。
+#
+# 2026-10-31 改成三条:
+#   1) 分页:只探测当前页那 20 条要的目录(20~40 个),不再扫全部 204 个;
+#   2) stale-while-revalidate:老数据过期后**先返回老数据**,后台线程再刷新,
+#      用户点进去立刻有内容,慢的那部分发生在看不见的地方;
+#   3) 预算:单轮真实 SMB 探测最多 _HIST_PROBE_BUDGET 秒,超了标「无法确认」。
+# 三条合起来把首屏从 194 秒降到「旧值毫秒级 / 冷启动有硬上限」。
+_HIST_TTL = 5.0
+_HIST_PROBE_BUDGET = 12.0     # 单轮真实 SMB 探测的硬上限(秒)
+_HIST_DEFAULT_LIMIT = 20      # 与前端 histPageSize 默认值一致
+_HIST_MAX_LIMIT = 200
+_HIST_SWR = True              # 老值先返回 + 后台刷新;测试可关
+_HIST_CACHE = {}              # (offset, limit) -> {"ts": float, "payload": dict}
+_HIST_LOCK = threading.Lock()
+_HIST_REFRESHING = set()      # 正在后台刷新的 (offset, limit),单飞
+
+
+def _hist_cache_clear():
+    """历史缓存失效。删除历史后调用,让前端下一轮立刻看到新列表。"""
+    with _HIST_LOCK:
+        _HIST_CACHE.clear()
+
+
+def _norm_page(total, offset, limit):
+    """把 offset/limit 夹进合法范围,返回 (offset, limit)。
+
+    越界 offset 回退到最后一页 —— 删掉几条后前端还停在旧页码时,不该给空列表。
+    """
+    limit = _HIST_DEFAULT_LIMIT if limit is None else int(limit)
+    limit = max(1, min(_HIST_MAX_LIMIT, limit))
+    offset = max(0, int(offset or 0))
+    if total and offset >= total:
+        offset = ((total - 1) // limit) * limit
+    return offset, limit
+
+
+def _build_history_payload(state, offset, limit):
+    """真算一份 payload。只在缓存 miss、或后台刷新时进这里。
+
+    顺序有讲究:先算用户当页要看的 files,再跑惰性补算。反过来的话补算会
+    把这一轮的探测预算吃光,当页反而全是「无法确认」。
+    """
+    old_budget = _probe_budget(_HIST_PROBE_BUDGET)
+    try:
+        cfg_h = state.get_config()
+        history = state.get_history()      # 深拷贝,500 条几十毫秒:只取一次
+        total = len(history)
+        offset, limit = _norm_page(total, offset, limit)
+        ordered = history[::-1]            # 新到旧:与前端原本的排序一致
+        page = ordered[offset:offset + limit]
+        # 只预热当前页要探测的目录(20 条最多 40 个),不再是全部 204 个
+        _prefetch_dirs(_prefetch_paths(page, cfg_h),
+                       budget=_probe_budget())
+        entries = []
+        for e in page:
+            item = dict(e)
+            item["files"] = _history_files_cached(e, cfg_h)  # 各文件当前位置
+            entries.append(item)
+        # 惰性补算是「补历史存量」这类后台数据,排在当页之后、吃剩余预算;
+        # 预算耗尽它们自己会快速返回(见 _backfill_* 里的 spend 判定),
+        # 没补到的下一轮继续,不影响本页返回。
+        _backfill_history_stats(state)     # 旧条目缺容量/段数
+        _backfill_gift_fields(state)       # 旧条目缺礼物可见度/诊断计数
+        _backfill_media_info(state)        # 旧条目缺实际分辨率/码率
+        return {"entries": entries, "total": total,
+                "offset": offset, "limit": limit,
+                "nas_mounted": _nas_mounted(cfg_h),
+                "archive_roots": _allowed_roots(cfg_h)}
+    finally:
+        _probe_budget_restore(old_budget)
+
+
+def _refresh_hist_sync(state, key, offset, limit):
+    """真算并写缓存。同步路径与后台刷新都走这里 ⇒ 天然单飞(共用 _HIST_LOCK)。"""
+    with _HIST_LOCK:
+        # 等锁期间别的线程可能已经算好,再判一次,避免排队后重复计算
+        hit = _HIST_CACHE.get(key)
+        if hit is not None and time.time() - hit["ts"] < _HIST_TTL:
+            return hit["payload"]
+        payload = _build_history_payload(state, offset, limit)
+        _HIST_CACHE[key] = {"ts": time.time(), "payload": payload}
+        return payload
+
+
+def _spawn_hist_refresh(state, key, offset, limit):
+    """老值已过期:起后台线程重算,当前请求立刻返回老值(stale-while-revalidate)。
+
+    同一 (offset, limit) 同时只允许一个刷新线程,否则每 5 秒一个新线程、
+    SMB 反而更挤 —— 本来就是单会话串行,并发只会互相拖。
+    """
+    with _HIST_LOCK:
+        if key in _HIST_REFRESHING:
+            return
+        _HIST_REFRESHING.add(key)
+
+    def _run():
+        try:
+            _refresh_hist_sync(state, key, offset, limit)
+        except Exception as exc:           # 后台失败不影响任何已返回的响应
+            print(f"[history] 后台刷新失败: {exc}", flush=True)
+        finally:
+            with _HIST_LOCK:
+                _HIST_REFRESHING.discard(key)
+
+    try:
+        threading.Thread(target=_run, name="hist-refresh", daemon=True).start()
+    except Exception as exc:
+        with _HIST_LOCK:
+            _HIST_REFRESHING.discard(key)
+        print(f"[history] 后台刷新线程起不来: {exc}", flush=True)
+
+
+def _history_payload(state, offset=0, limit=None):
+    """/api/history 的响应体(分页 + 条目缓存 + stale-while-revalidate)。
+
+    返回 entries 只是**当前页**(新到旧),另带 total/offset/limit 供前端
+    算页码。调用方只读并 json.dumps,所以多处复用同一个 dict 是安全的。
+    """
+    limit = _HIST_DEFAULT_LIMIT if limit is None else max(
+        1, min(_HIST_MAX_LIMIT, int(limit)))
+    offset = max(0, int(offset or 0))
+    key = (offset, limit)
+    hit = _HIST_CACHE.get(key)
+    if hit is not None:
+        if time.time() - hit["ts"] < _HIST_TTL:
+            return hit["payload"]
+        if _HIST_SWR and _HIST_TTL > 0:
+            _spawn_hist_refresh(state, key, offset, limit)
+            return hit["payload"]          # 老值照给:用户先看到内容
+    return _refresh_hist_sync(state, key, offset, limit)
 
 
 def _open_folder(state, body):
@@ -719,6 +1558,318 @@ def _upload_preview(state, name, data):
     except OSError as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "file": fname}
+
+
+def _backfill_history_stats(state):
+    """给旧代码收尾的 done 条目惰性补算 size / segments(一次性迁移)。
+
+    2026-09-21 之前 _history_finish 不写 size/segments(_media_duration 对分片
+    模板返回 None),历史页这些条目「无容量、无段数」。素材还在(本机或归档
+    目标)就能补算;补过的条目带 size 字段,不会重复算。
+    """
+    mon = _monitor_live()
+    if mon is None or not hasattr(mon, "_segment_stats"):
+        return False
+    changed = False
+    try:
+        for e in mon._history:
+            if e.get("status") != "done" or e.get("size") is not None:
+                continue
+            tmpl = e.get("output_path") or ""
+            if not tmpl:
+                continue
+            base = os.path.basename(tmpl)
+            candidates = []
+            dest = (e.get("archive") or {}).get("dest")
+            # 走 _dir_listing 缓存:这条在 NAS 上,原样 isdir 每条都是一趟 SMB
+            if dest and _dir_listing(dest)[0] == _DIR_OK:
+                candidates.append(dest)          # 素材大概率已在归档目标
+            local_dir = os.path.dirname(tmpl)
+            if local_dir not in candidates:
+                candidates.append(local_dir)
+            for d in candidates:
+                seg = mon._segment_stats(os.path.join(d, base))
+                if seg and seg["count"]:
+                    e["segments"] = seg["count"]
+                    e["size"] = seg["bytes"]
+                    changed = True
+                    break
+    except Exception as exc:                      # 补全失败不影响历史页正常返回
+        print(f"[history] 容量/段数补全失败: {exc}", flush=True)
+    if changed:
+        commit = getattr(mon, "_commit_history", None)
+        if commit:
+            commit()
+        state.set_history(json.loads(json.dumps(mon._history)))
+    return changed
+
+
+# 惰性补算礼物字段的每调用上限:本机 jsonl 读取快(实测几十~几百 KB/场),
+# 归档目标(SMB)读慢,分开限额 —— 防止一次 /api/history 请求被补算拖死。
+_GIFT_LAZY_LOCAL_CAP = 10
+_GIFT_LAZY_REMOTE_CAP = 2
+
+# ── 「本场素材确认不存在」的进程内记忆(2026-10-31)──────────────────
+# 没有它时补不上的存量条目**每一轮都会重新探测**:实测 519 条待补
+# (437 缺 gift_diag + 82 缺 light)对应的 .jsonl 全部不存在,而额度只在
+# 补成功时才推进,于是永远卡在最新的那几条上打转,一轮又一轮地白烧 SMB。
+#
+# 🔴 只记在内存,不写进 history.json:一是那些是「探测结论」不是录制事实,
+# 落盘会污染历史契约、还会让纯查询接口产生写盘副作用(见
+# tests/test_gift_integrity.py::test_skips_when_no_meta_files 与
+# tests/test_history_media.py::test_backfill_missing_files_is_noop 守的语义);
+# 二是重启后重探一轮的代价很小 —— 每轮远端额度只有 2 条,价格可忽略。
+_ABSENT_RETRY = 7 * 86400.0        # 确认不存在后,7 天内不再探
+_ABSENT_PROBE = {}                 # (output_path, kind) -> 确认时间
+_ABSENT_LOCK = threading.Lock()
+_ABSENT_MAX = 4000
+
+
+def _absent_cache_clear():
+    with _ABSENT_LOCK:
+        _ABSENT_PROBE.clear()
+
+
+def _absent_skip(entry, kind):
+    """本场该 kind 的素材是否已被确认不存在(近期)。"""
+    key = ((entry.get("output_path") or ""), kind)
+    with _ABSENT_LOCK:
+        ts = _ABSENT_PROBE.get(key)
+    return bool(ts and time.time() - ts < _ABSENT_RETRY)
+
+
+def _absent_mark(entry, kind):
+    """记住「本场该 kind 的素材确实不存在」,让接下来 7 天别再探。"""
+    key = ((entry.get("output_path") or ""), kind)
+    with _ABSENT_LOCK:
+        if len(_ABSENT_PROBE) >= _ABSENT_MAX:
+            # 简单剪枝:清掉最早确认的那批(都是老场次,重探也不亏)
+            for k in sorted(_ABSENT_PROBE, key=_ABSENT_PROBE.get)[: _ABSENT_MAX // 2]:
+                _ABSENT_PROBE.pop(k, None)
+        _ABSENT_PROBE[key] = time.time()
+
+
+def _backfill_gift_fields(state):
+    """为缺 gift_integrity / gift_diag 的 done 条目增量补算(2026-10-16)。
+
+    背景:礼物可见度胶囊与诊断警示都依赖收尾写入的字段,而补算脚本
+    (scripts/backfill_gift_integrity.py --apply)必须停服才能跑 —— 用户重启
+    服务后存量条目全部无数据,功能「看起来没实现」。把补算挂到历史页:
+    每次 /api/history 调用补一小批,多刷新几次就全部补齐,无需停服。
+
+    规则:
+      - 只处理 status=done 且缺字段的条目,新到旧优先(用户先看到近期场次);
+      - gift_integrity 需要本场 jsonl + duration;gift_diag 只需要
+        giftwatch.jsonl,两者独立补、互不阻塞;
+      - 本机与归档目标都找(与 backfill 脚本同一套候选规则),但分限额;
+      - 文件确实不存在的条目每次请求做几次 exists() 探测,代价可忽略。
+    """
+    mon = _monitor_live()
+    if mon is None or not hasattr(mon, "_history"):
+        return False
+    budget = _probe_budget()
+    changed = False
+    local_used = remote_used = 0
+    try:
+        for e in reversed(mon._history):          # 新到旧:用户先看到近期场次
+            if e.get("status") != "done":
+                continue
+            # 预算耗尽就收工:剩下的留给下一轮。绝不能像原来那样硬跑完 519 条,
+            # 那会把同一轮里当页要看的 files 探测也一起挤掉。
+            if budget is not None and not budget.spend():
+                break
+            # 2026-10-29 结构升级:礼物完整性的主判据从「时间占比」换成
+            # gift_integrity.light(轻通道收到 vs 落盘 vs 字段缺项)。老条目只有
+            # 时间占比、没有对账,这里顺带重算一次把它们补齐(补算拿不到实时
+            # 计数 → recv=null、status=field_only,如实标注"未对账",不谎报完整)。
+            gi_old = e.get("gift_integrity")
+            need_gi = gi_old is None or (isinstance(gi_old, dict) and "light" not in gi_old)
+            need_gd = e.get("gift_diag") is None
+            if not (need_gi or need_gd):
+                continue
+            tmpl = e.get("output_path") or ""
+            if not tmpl:
+                continue
+            # 已确认「本场素材真的没有」的条目:近期不再探测(进程内记忆,见 _absent_skip)
+            if _absent_skip(e, "gift"):
+                continue
+            stem = os.path.basename(tmpl)
+            if "-%03d." in stem:
+                stem = stem.split("-%03d.")[0]
+            else:
+                s, _ = os.path.splitext(stem)
+                if len(s) > 3 and s[-4] == "-" and s[-3:].isdigit():
+                    stem = s[:-4]
+            dirs = []
+            dest = (e.get("archive") or {}).get("dest")
+            # ⚠️ 这条在限额检查**之前**,所以缺字段的条目每轮都会走到这里。
+            # 原来裸 isdir(dest) 在 NAS 上是每轮 456 趟 SMB(实测 ~3.4s),
+            # 走 _dir_listing 缓存后变成内存查找(去重后只有几十个目录)。
+            if dest and _dir_listing(dest)[0] == _DIR_OK:
+                dirs.append(dest)                 # 归档目标优先(本机多半已删)
+            local_dir = os.path.dirname(tmpl)
+            if local_dir not in dirs:
+                dirs.append(local_dir)
+            is_remote = bool(dest and dirs and dirs[0] == dest)
+            if is_remote and remote_used >= _GIFT_LAZY_REMOTE_CAP:
+                continue
+            if not is_remote and local_used >= _GIFT_LAZY_LOCAL_CAP:
+                continue
+            # 额度**尝试即计数**(2026-10-31):原来只在补成功时 +1,而补不上的
+            # 条目(素材不存在)永远不计数 ⇒ 每轮把 519 条全跑一遍,额度形同虚设。
+            if is_remote:
+                remote_used += 1
+            else:
+                local_used += 1
+
+            dur = float(e.get("duration") or 0)
+            got = False
+            if need_gi and dur > 0:
+                for d in dirs:
+                    jp = os.path.join(d, ".meta", stem + ".danmaku.jsonl")
+                    if not _has_entry_file(d, ".meta", stem + ".danmaku.jsonl"):
+                        continue
+                    try:
+                        gi = danmaku_mod.gift_channel_coverage(
+                            jp, dur, started_at=e.get("started_at"))
+                    except Exception:
+                        gi = None
+                    if gi is not None:
+                        e["gift_integrity"] = gi
+                        got = True
+                    break
+            if need_gd:
+                for d in dirs:
+                    gp = os.path.join(d, ".meta", stem + ".giftwatch.jsonl")
+                    if not _has_entry_file(d, ".meta", stem + ".giftwatch.jsonl"):
+                        continue
+                    try:
+                        counts = {"fault": 0, "suspect": 0, "muted": 0, "quiet": 0}
+                        total = 0
+                        with open(gp, encoding="utf-8") as f:
+                            for line in f:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                try:
+                                    r = json.loads(line)
+                                except Exception:
+                                    continue
+                                lv = str(r.get("level") or "")
+                                counts[lv] = counts.get(lv, 0) + 1
+                                total += 1
+                        counts["total"] = total
+                    except OSError:
+                        counts = None
+                    if counts is not None:
+                        e["gift_diag"] = counts
+                        got = True
+                    break
+            if got:
+                changed = True
+            else:
+                # 什么都没补到:如果所有候选目录的 .meta 都**确认过**(OK 或确实
+                # 不存在),说明本场素材真的没有,记进内存让接下来 7 天别再探。
+                # 只认 UNKNOWN 之外的状态 —— 预算耗尽/NAS 未挂载时是 UNKNOWN,
+                # 那是「这次没看成」,必须下一轮再试,不能误判成「没有」。
+                meta_states = [_dir_listing(os.path.join(d, ".meta"))[0]
+                               for d in dirs]
+                if meta_states and all(st != _DIR_UNKNOWN for st in meta_states):
+                    _absent_mark(e, "gift")
+    except Exception as exc:                      # 补全失败不影响历史页正常返回
+        print(f"[history] 礼物字段补全失败: {exc}", flush=True)
+    if changed:
+        commit = getattr(mon, "_commit_history", None)
+        if commit:
+            commit()
+        if state is not None:
+            state.set_history(json.loads(json.dumps(mon._history)))
+    return changed
+
+
+# 画质/码率补算的每调用上限。与礼物补算同样的分工:本机读得快、SMB 上每一条
+# 都是一趟真网络往返,额度必须分开,否则 500 条存量会把历史页拖成 2026-10-26
+# 那样的 43 秒请求。
+_MEDIA_LAZY_LOCAL_CAP = 20
+_MEDIA_LAZY_REMOTE_CAP = 16
+
+
+def _backfill_media_info(state):
+    """给缺 media 的 done 条目惰性补算「实际分辨率 + 实测码率」(2026-10-28)。
+
+    新场次在 monitor._history_finish 收尾时就写好了(那时文件还在本机),
+    存量条目(上线前的 500 条)只能事后补:文件名、体积、时长都在 history.json
+    里,只缺分辨率 —— 读一次文件头就知道,不必解码、不必 ffprobe。
+
+    规则与礼物补算一致:新到旧、本机/归档目标都找、分限额、失败不影响返回。
+    补不到的条目**不写空值**,下一轮还会试(NAS 未挂载是暂时的)。
+    """
+    mon = _monitor_live()
+    if mon is None or not hasattr(mon, "_history"):
+        return False
+    media_info = getattr(mon, "_media_info", None)
+    seg_stats = getattr(mon, "_segment_stats", None)
+    if media_info is None:
+        return False
+    changed = False
+    local_used = remote_used = 0
+    budget = _probe_budget()
+    try:
+        for e in reversed(mon._history):          # 新到旧:用户先看到近期场次
+            if e.get("status") != "done" or e.get("media"):
+                continue
+            if budget is not None and not budget.spend():
+                break                             # 预算用完:余下的下一轮再补
+            tmpl = e.get("output_path") or ""
+            if not tmpl:
+                continue
+            # 素材确认不存在时与礼物补算同样处理:近期别再探(进程内记忆)
+            if _absent_skip(e, "media"):
+                continue
+            base = os.path.basename(tmpl)
+            dirs = []
+            dest = (e.get("archive") or {}).get("dest")
+            # 走 _dir_listing 缓存:直接 isdir 的话每轮就是几百趟 SMB
+            if dest and _dir_listing(dest)[0] == _DIR_OK:
+                dirs.append(dest)                 # 归档目标优先(本机多半已删)
+            local_dir = os.path.dirname(tmpl)
+            if local_dir not in dirs:
+                dirs.append(local_dir)
+            is_remote = bool(dest and dirs and dirs[0] == dest)
+            if is_remote and remote_used >= _MEDIA_LAZY_REMOTE_CAP:
+                continue
+            if not is_remote and local_used >= _MEDIA_LAZY_LOCAL_CAP:
+                continue
+            if is_remote:
+                remote_used += 1
+            else:
+                local_used += 1
+            mi = None
+            for d in dirs:
+                cand = os.path.join(d, base)
+                seg = None if (is_remote or seg_stats is None) else seg_stats(cand)
+                # 远端不探末片:多一次 SMB open 只换来「中途降级」这一条信息,
+                # 而这批存量场次录制时还没有自动降级功能
+                mi = media_info(cand, e.get("size"), e.get("duration"),
+                                seg=seg, tail=not is_remote)
+                if mi:
+                    break
+            if mi and mi.get("w"):       # 只认拿到分辨率的结果:只写码率会把条目
+                e["media"] = mi           # 锁死(media 非空即视为已补),而归档目标
+                changed = True            # 未挂载时恰恰只算得出码率
+            else:
+                dir_states = [_dir_listing(d)[0] for d in dirs]
+                if dir_states and all(st != _DIR_UNKNOWN for st in dir_states):
+                    _absent_mark(e, "media")   # 目录都确认过仍读不到:近期别再来
+    except Exception as exc:                      # 补全失败不影响历史页正常返回
+        print(f"[history] 画质/码率补全失败: {exc}", flush=True)
+    if changed:
+        commit = getattr(mon, "_commit_history", None)
+        if commit:
+            commit()
+        if state is not None:
+            state.set_history(json.loads(json.dumps(mon._history)))
+    return changed
 
 
 def _delete_history(state, keys=None, clear=False):
@@ -1039,7 +2190,84 @@ def make_handler(state: State):
                 # 否则录制卡片里的文件夹地址会撑破卡片。
                 st = state.get_status()
                 st["archive_roots"] = _allowed_roots(state.get_config())
+                # 录制期限快照:唯一真源 monitor.record_state(纯派生、零写盘),
+                # 前端只渲染 state/days_left,不自算 —— 两份公式必然漂移。
+                st["record_windows"] = _record_windows(state.get_config())
+                # 缺号补号巡检状态:前端据此在卡片/详情上显示「巡检中·上次/下次」
+                # (没有这段,「缺web_rid」徽标就只是个静态标记,看不出后台在不在试)
+                st["rid_backfill"] = _rid_backfill_status(state.get_config())
+                # 进程自报「我跑的是哪份代码」。~/Downloads 下可能并存历史发布
+                # 快照,谁先起来谁占住端口(2026-10-29 就在快照目录里跑起过一份
+                # 入口新、页面旧的实例,整站界面回退三个月,而外层只看到 HTTP 200
+                # 便以为"服务正常")。启动器据此比对,发现不是本目录就地说明。
+                st["project_root"] = BASE
+                # 录制暂存现状(2026-10-30):前端卡片的落盘地址、设置页的
+                # 「生效中 / 待生效」提示都读这里,**不在前端各算一份** ——
+                # 暂存根可切换后,`config.recorder.output_dir` 已经不等于
+                # 「正在写哪儿」(空串时是默认根,在录时可能还是旧根)。
+                try:
+                    import monitor as mon
+                    st["storage"] = mon.stage_switch_snapshot(state.get_config())
+                except Exception as e:         # noqa: BLE001
+                    st["storage"] = {"error": str(e)}
+                # 崩溃告警摘要:顺手塞进这个 3 秒轮询的状态接口 —— 事件一发生,
+                # 导航条 3 秒内就能变红。走 /api/incidents 要现算 health(10s 缓存),
+                # 不适合做第一响应;那个接口只在展开详情时才拉。
+                try:
+                    st["incidents"] = incidents.summary()
+                except Exception:
+                    st["incidents"] = None
                 self._send(200, st)
+            elif path == "/api/contract":
+                # 跨项目契约快照(仅本机自用;跨机分发走 NAS _对接/contract/,
+                # 两机零 HTTP —— 见 interop.py 模块注释)
+                try:
+                    self._send(200, interop_mod.contract_payload())
+                except Exception as e:
+                    self._send(500, {"ok": False, "error": str(e)})
+            elif path == "/api/interop":
+                # 对接通道状态(「项目对接」页):NAS 信箱四通道只读探测
+                # (interop.mailbox_status,内置 30s 缓存) + 消费协程心跳 +
+                # 在录场次 session.json 落点检查。全旁路:探测挂了返回原因,
+                # 不带挂 UI。
+                data = interop_mod.mailbox_status(state.get_config())
+                try:
+                    beat_ts = health_mod.last_beat("issue_feedback")
+                    data["feedback_loop"] = {
+                        "beat_age": (round(time.time() - beat_ts, 1)
+                                     if beat_ts else None),
+                        "grace": 1500,   # 与 health.SPECS 同值,前端判定用
+                    }
+                except Exception:
+                    data["feedback_loop"] = None
+                # 在录场次:session.json 落在本机日期目录(起录写入,归档时
+                # 随目录进 NAS 并转 finalized)。output_path 是 %03d 模板,
+                # dirname 即日期目录。
+                try:
+                    st = state.get_status()
+                    sessions = []
+                    for name, rec in (st.get("recordings") or {}).items():
+                        if not ((rec or {}).get("recording") is True
+                                or str((rec or {}).get("status")) == "recording"):
+                            continue
+                        date_dir = os.path.dirname(str((rec or {}).get("output_path") or ""))
+                        sess = {"name": name, "date_dir": date_dir,
+                                "session_state": None, "prefixes": 0,
+                                "contract_version": None}
+                        try:
+                            with open(os.path.join(date_dir, interop_mod.SESSION_STATE_NAME),
+                                      encoding="utf-8") as f:
+                                doc = json.load(f)
+                            sess.update(session_state=doc.get("state"),
+                                        prefixes=len(doc.get("prefixes") or []),
+                                        contract_version=doc.get("contract_version"))
+                        except Exception:
+                            pass
+                        sessions.append(sess)
+                    data["recording_sessions"] = sessions
+                except Exception:
+                    data["recording_sessions"] = []
+                self._send(200, data)
             elif path == "/api/retention":
                 # 孤儿目录延迟清理台账(只读):前端展示「谁在等待、还剩几天」
                 try:
@@ -1055,6 +2283,22 @@ def make_handler(state: State):
                     self._send(200, run_checks(state.get_config()))
                 except Exception as e:
                     self._send(500, {"error": str(e)})
+            elif path == "/api/giftwatch":
+                # 礼物诊断记录。带 ?path=<录制输出路径> → 只返回该场次的记录
+                # (录制历史行展开区用);不带 → 全量倒序(兼容旧消费方)。
+                from urllib.parse import parse_qs, urlparse
+                q = parse_qs(urlparse(self.path).query)
+                if q.get("path"):
+                    try:
+                        self._send(200, _giftwatch_session_records(
+                            state.get_config(), (q.get("path") or [""])[0]))
+                    except Exception as e:
+                        self._send(500, {"ok": False, "error": str(e)})
+                else:
+                    try:
+                        self._send(200, _giftwatch_records(state.get_config()))
+                    except Exception as e:
+                        self._send(500, {"ok": False, "error": str(e)})
             elif path == "/api/nas":
                 cfg = state.get_config().get("nas") or {}
                 masked = {**cfg, "password": ""}  # 脱敏:密码字段恒为空串
@@ -1062,15 +2306,19 @@ def make_handler(state: State):
                                  "archive": state.get_config().get("archive") or {},
                                  **state.get_nas_status()})
             elif path == "/api/history":
-                cfg_h = state.get_config()
-                entries = []
-                for e in state.get_history():
-                    item = dict(e)
-                    item["files"] = _history_files(e, cfg_h)  # 各文件当前实际位置
-                    entries.append(item)
-                self._send(200, {"entries": entries,
-                                 "nas_mounted": _nas_mounted(cfg_h),
-                                 "archive_roots": _allowed_roots(cfg_h)})
+                # 分页 + 只探当前页 + 老值先返回,见 _history_payload 的说明。
+                # ?offset=&limit= 缺省为第一页(20 条),与前端 histPageSize 对齐。
+                from urllib.parse import parse_qs, urlparse
+                q = parse_qs(urlparse(self.path).query)
+                try:
+                    _off = max(0, int((q.get("offset") or ["0"])[0]))
+                except (TypeError, ValueError):
+                    _off = 0
+                try:
+                    _lim = int((q.get("limit") or [str(_HIST_DEFAULT_LIMIT)])[0])
+                except (TypeError, ValueError):
+                    _lim = _HIST_DEFAULT_LIMIT
+                self._send(200, _history_payload(state, _off, _lim))
             elif path == "/api/danmaku/session":
                 # query 参数 path=录制输出路径(模式或文件)
                 from urllib.parse import parse_qs, urlparse
@@ -1086,6 +2334,24 @@ def make_handler(state: State):
                 try:
                     self._send(200, health_mod.snapshot(
                         state.get_config(), _health_overrides(state)))
+                except Exception as e:
+                    self._send(500, {"error": str(e)})
+            elif path == "/api/incidents":
+                # 崩溃/故障事件流(左侧导航告警条)。与 health 的分工:
+                #   incidents = 历史事件(崩过几次、崩在哪,秒级恢复的也留痕)
+                #   health    = 此刻状态(19 个组件的当前判定)
+                # 两个都要:2026-10-29 那 86 次录制崩溃是「同秒重启」的,
+                # health 全程 ok,只有事件流能看见。
+                from urllib.parse import parse_qs, urlparse
+                q = parse_qs(urlparse(self.path).query)
+                try:
+                    limit = max(1, min(200, int((q.get("limit") or ["50"])[0])))
+                except (TypeError, ValueError):
+                    limit = 50
+                try:
+                    payload = incidents.snapshot(limit=limit)
+                    payload["health"] = _incident_health_faults(state)
+                    self._send(200, payload)
                 except Exception as e:
                     self._send(500, {"error": str(e)})
             elif path == "/api/shortcuts":
@@ -1121,6 +2387,70 @@ def make_handler(state: State):
                     "selected": preview_mod.selected_preview(cfg, name),
                     "dir": preview_mod.streamer_dir(cfg, name),
                 })
+            elif path == "/live" or path.startswith("/live/"):
+                # 实时预览弹出页:静态单页,数据经 /api/live/<主播> 与弹幕增量接口
+                try:
+                    with open(os.path.join(BASE, "static", "live.html"), "rb") as f:
+                        self._send(200, f.read(), "text/html; charset=utf-8", no_store=True)
+                except OSError:
+                    self._send(500, "live.html 缺失")
+            elif path.startswith("/live-hls/"):
+                # 实时预览分片:/live-hls/<主播>/<文件>(realpath 防穿越)。
+                # 均为即时文件,一律 no-store:ffmpeg 重启会重置分片序号,
+                # 缓存旧分片会导致播放器拼出坏画面。
+                rest = path[len("/live-hls/"):]
+                parts = rest.split("/", 1)
+                if len(parts) == 2:
+                    name = unquote(parts[0]); fname = unquote(parts[1])
+                    cfg = state.get_config()
+                    target = live_hls_mod.safe_join(cfg, name, fname)
+                    if target and os.path.isfile(target):
+                        ctype = "application/octet-stream"
+                        if fname.lower().endswith(".m3u8"):
+                            ctype = "application/vnd.apple.mpegurl"
+                        elif fname.lower().endswith(".ts"):
+                            ctype = "video/mp2t"
+                        try:
+                            with open(target, "rb") as f:
+                                self._send(200, f.read(), ctype, no_store=True)
+                        except OSError:
+                            self._send(500, {"error": "读取失败"})
+                        return
+                self._send(404, {"error": "not found"})
+            elif path.startswith("/vendor/"):
+                # 本地 vendored 第三方库(hls.js 等,无 CDN 依赖)
+                fname = unquote(path[len("/vendor/"):])
+                root = os.path.realpath(os.path.join(BASE, "static", "vendor"))
+                target = os.path.realpath(os.path.join(root, fname))
+                if fname and "/" not in fname and "\\" not in fname \
+                        and target.startswith(root + os.sep) and os.path.isfile(target):
+                    ctype = ("application/javascript; charset=utf-8"
+                             if fname.lower().endswith(".js") else "application/octet-stream")
+                    try:
+                        with open(target, "rb") as f:
+                            self._send(200, f.read(), ctype)
+                    except OSError:
+                        self._send(500, {"error": "读取失败"})
+                else:
+                    self._send(404, {"error": "not found"})
+            elif path.startswith("/api/live/"):
+                name = unquote(path[len("/api/live/"):])
+                self._send(200, _live_state(state, name))
+            elif path.startswith("/api/danmaku/live/"):
+                # 实时预览弹幕增量:?after=<seq> 断点续传
+                from urllib.parse import parse_qs, urlparse
+                name = unquote(path[len("/api/danmaku/live/"):])
+                q = parse_qs(urlparse(self.path).query)
+                try:
+                    after = int((q.get("after") or ["0"])[0])
+                except ValueError:
+                    after = 0
+                try:
+                    import danmaku as danmaku_mod
+                    self._send(200, danmaku_mod.live_feed(name, after))
+                except Exception as e:
+                    self._send(200, {"active": False, "seq": 0, "items": [],
+                                     "error": str(e)[:120]})
             else:
                 self._send(404, {"error": "not found"})
 
@@ -1139,16 +2469,81 @@ def make_handler(state: State):
                 except Exception as e:
                     res = {"ok": False, "error": str(e), "restart_required": False}
                 self._send(200 if res["ok"] else 400, res)
+            elif path == "/api/incidents/dismiss":
+                # 标记已读。只影响导航条上的「未读」计数,条目本身保留 ——
+                # 崩溃记录的价值在于事后回看,不能因为点过一次就消失。
+                ids = body.get("ids")
+                n = incidents.dismiss(ids if isinstance(ids, list) else None)
+                self._send(200, {"ok": True, "dismissed": n,
+                                 "summary": incidents.summary()})
+            elif path == "/api/quality/unlock":
+                # 抖动锁定(24 h 内切换 >6 次)只能人工解除:机器确实扛不住时,
+                # 自动恢复只会把它反复拉回过载,所以刻意不留自动解锁的路径。
+                ctrl = state.get_quality_ctrl() or {}
+                fn = ctrl.get("unlock")
+                if not fn:
+                    self._send(200, {"ok": False, "error": "画质调度未启动"})
+                else:
+                    try:
+                        self._send(200, {"ok": True, "quality": fn()})
+                    except Exception as e:
+                        self._send(500, {"ok": False, "error": str(e)})
             elif path == "/api/nas":
                 res = _save_nas(state, body)
                 self._send(200 if res["ok"] else 400, res)
             elif path == "/api/nas/test":
                 self._send(200, nas_mod.test_connection(body))
+            elif path == "/api/gift-watch/test":
+                # 用「表单里还没保存的值」直接测,用户不必先保存再试
+                gw = dict(state.get_config().get("gift_watch") or {})
+                if isinstance(body.get("gift_watch"), dict):
+                    gw.update(body["gift_watch"])
+                ch = notify_mod.resolve_channels(gw)
+                where = "群机器人" if ch["url"] else "连接器(发给你本人)"
+                r = asyncio.run(notify_mod.push_by_config(
+                    gw, "礼物告警 · 测试",
+                    "这是一条测试通知,收到即代表「录制中 45 分钟无礼物 → 企微告警」"
+                    f"的通路可用。当前通道:{where}。"))
+                self._send(200, {"ok": r["ok"], "channels": r["channels"], "error": r["error"]})
             elif path == "/api/nas/shares":
                 ok, shares, err = nas_mod.list_shares(
                     body.get("host", ""), body.get("username", ""),
                     body.get("password", "") or nas_mod.get_password())
                 self._send(200, {"ok": ok, "shares": shares, "error": err})
+            elif path == "/api/recorder/stage-dir":
+                # 切换录制暂存目录(设置页「默认录制文件夹暂存目录」)。
+                # body: {dir: "~/Movies/DouyinRecordings" | "", now: true|false}
+                # 走这条而不是让调用方自己拼 /api/config:它是唯一带「在录时怎么办」
+                # 语义的入口(now=true 会真的重启在录的 ffmpeg),不该藏在通用保存里。
+                # 内部复用 update_config ⇒ 校验、落盘、回滚、切换只有一条实现。
+                try:
+                    new_dir = str(body.get("dir") or "")
+                    res = state.update_config({"recorder": {
+                        "output_dir": new_dir,
+                        "output_dir_switch": "now" if body.get("now") else "next_session",
+                    }})
+                except Exception as e:          # noqa: BLE001
+                    res = {"ok": False, "error": str(e)}
+                self._send(200, res)
+            elif path == "/api/pick-dir":
+                # 弹 macOS 原生目录选择框。会阻塞到用户点完(默认 180s 上限),
+                # 但服务是 ThreadingHTTPServer(每请求一线程),不会拖住别的请求。
+                path_, err = nas_mod.pick_directory(
+                    body.get("prompt") or "选择外接硬盘上的归档目录",
+                    timeout=int(body.get("timeout") or nas_mod.PICK_TIMEOUT))
+                if err:
+                    self._send(200, {"ok": False, "error": err})
+                else:
+                    self._send(200, {"ok": True, "path": path_,
+                                     "writable": nas_mod._probe_writable(path_)})
+            elif path == "/api/archive/backfill":
+                # 手动把「未归档但本机还在」的场次补进队列(插上盘后想立刻搬时用)
+                try:
+                    n = nas_mod.backfill_from_history(state.get_config())
+                    self._send(200, {"ok": True, "added": n,
+                                     "queue": nas_mod.queue_status()})
+                except Exception as e:
+                    self._send(200, {"ok": False, "error": str(e)})
             elif path == "/api/retention/sweep":
                 # 手动触发一次孤儿目录清理。默认 dry-run,只有 body.apply=true 才真删。
                 try:
@@ -1195,6 +2590,11 @@ def make_handler(state: State):
                                      "error": None if ok else "暂无缓存流地址,请稍候或点刷新"})
                 else:
                     self._send(400, {"ok": False, "error": "录制控制未就绪"})
+            elif path.startswith("/api/live/") and path.endswith("/start"):
+                # 实时预览(按需独立拉流):打开预览页时启动/续期预览会话
+                name = unquote(path[len("/api/live/"):-len("/start")])
+                res = _live_start(state, name)
+                self._send(200 if res.get("ok") else 400, res)
             elif path == "/api/open-folder":
                 res = _open_folder(state, body)
                 self._send(200 if res["ok"] else 400, res)
@@ -1210,7 +2610,10 @@ def make_handler(state: State):
                 name = unquote(path[len("/api/previews/"):-len("/delete")])
                 self._send(200, _delete_preview(state, name, body.get("file", "")))
             elif path == "/api/history/delete":
-                self._send(200, _delete_history(state, body.get("keys"), body.get("clear", False)))
+                res = _delete_history(state, body.get("keys"), body.get("clear", False))
+                if res.get("ok"):
+                    _hist_cache_clear()   # 否则前端最多 5 秒后才看到被删的记录
+                self._send(200, res)
             elif path == "/api/danmaku/offset":
                 self._send(200, _danmaku_apply_offset(state, body))
             elif path == "/api/auth/login":
@@ -1223,6 +2626,10 @@ def make_handler(state: State):
                 self._send(200, _auth_logout(state))
             elif path == "/api/auth/verify":
                 self._send(200, _auth_verify(state))
+            elif path == "/api/auth/open-home":
+                self._send(200, _auth_open_home(state))
+            elif path == "/api/auth/restart-browser":
+                self._send(200, _auth_restart_browser(state))
             elif path == "/api/service/control":
                 action = (body.get("action") or "").strip()
                 ok, msg = _service_control(action)
@@ -1405,6 +2812,46 @@ def _shortcut_help():
     return dict(meta, **data)
 
 
+_INCIDENT_HEALTH = {"at": 0.0, "data": None}
+
+
+def _incident_health_faults(state):
+    """health 里当前判为 down/warn 的组件 —— 并入告警条的「当前故障」区。
+
+    为什么并入:事件流只记**显式接入**的崩溃点(录制/弹幕/主进程)。协程卡死、
+    Cookie 失效、NAS 掉线、硬编不可用这些没有"事件",但 health 已经全都有 ——
+    把它的 down/warn 并进来,才能做到「项目哪里出问题都在同一个地方看见」。
+
+    10 秒缓存:`_health_overrides` 会跑 launchctl 与 NAS 探测,导航条轮询比健康
+    面板更频繁,不缓存等于把一次翻页放大成十几次系统调用。
+    """
+    now = time.time()
+    c = _INCIDENT_HEALTH
+    if c["data"] is not None and (now - c["at"]) < 10:
+        return c["data"]
+    try:
+        snap = health_mod.snapshot(state.get_config(), _health_overrides(state))
+    except Exception as e:                       # noqa: BLE001
+        return {"items": [], "counts": {}, "ok": True, "error": str(e)}
+    items = []
+    for g in snap.get("groups") or []:
+        for it in g.get("items") or []:
+            if it.get("status") not in ("down", "warn"):
+                continue
+            items.append({
+                "key": it.get("key"), "name": it.get("name"),
+                "status": it.get("status"), "detail": it.get("detail"),
+                "group": g.get("name"), "count": it.get("count"),
+                "age_s": it.get("age_s"),
+            })
+    # down 排前面
+    items.sort(key=lambda x: (0 if x["status"] == "down" else 1, x["name"] or ""))
+    data = {"items": items, "counts": snap.get("counts") or {},
+            "ok": bool(snap.get("ok")), "generated_at": snap.get("generated_at")}
+    c["at"], c["data"] = now, data
+    return data
+
+
 def _health_overrides(state):
     """进程层与外部依赖的实时状态(不走心跳,每次请求现算)。
 
@@ -1489,6 +2936,25 @@ def _health_overrides(state):
     over["ffmpeg_bin"] = ({"status": "ok", "last_beat": now, "detail": ff} if ff
                           else {"status": "warn", "last_beat": now,
                                 "detail": "未找到 ffmpeg,开播时将无法录制"})
+
+    # 硬件编码器:默认走 vt,探不到就会整体回落 copy(体积变大但不丢素材),
+    # 所以这里必须显式报出来,不能让它静默发生。
+    try:
+        from preflight import probe_hw_encoder
+        hw_ok, hw_why = probe_hw_encoder(ff)
+    except Exception as e:
+        hw_ok, hw_why = True, "探针异常(按可用处理): %s" % e
+    mode = str((cfg.get("recorder") or {}).get("video_mode") or "").lower()
+    if hw_ok:
+        over["vt_encoder"] = {"status": "ok", "last_beat": now,
+                              "detail": "h264_videotoolbox 可用"
+                                        + ("(当前生效)" if mode == "vt" else
+                                           "(当前配置为 %s,未使用)" % (mode or "sw"))}
+    else:
+        over["vt_encoder"] = {"status": "warn" if mode == "copy" else "down",
+                              "last_beat": now,
+                              "detail": "硬件编码不可用:%s(录制将回落流复制)"
+                                        % hw_why}
     return over
 
 
@@ -1581,9 +3047,9 @@ def _service_plan(action):
         还没写出去(见 _spawn_delayed);
       · 终端快捷指令(scripts/ctl.py) —— 用户就坐在终端前,应当逐步同步执行、
         每步等一等再校验,最后把结果直接打给他。
-    若把「先清外来户再 kickstart」「bootstrap 前先 bootout」这些次序规则各写一遍,
-    两边迟早会悄悄分叉(一边修了、另一边还留着老 Bug)。所以规则只在本函数里
-    写一次,两个入口都从这里取。
+    若把「先清外来户再 kickstart」「已装载就直接拉起、未装载才 bootstrap」
+    这些次序规则各写一遍,两边迟早会悄悄分叉(一边修了、另一边还留着老 Bug)。
+    所以规则只在本函数里写一次,两个入口都从这里取。
 
     kind 是给调用方判断「要不要等」用的:
         term / kill          结束端口上非 launchd 名的实例
@@ -1635,18 +3101,34 @@ def _service_plan(action):
     if action == "start":
         if not os.path.exists(LAUNCHD_PLIST):
             return False, "未找到 launchd 配置:%s" % LAUNCHD_PLIST, []
-        # job 已装载时直接 bootstrap 会报 already loaded,必须先卸载再装载。
-        # 界面上「启动」多半就出现在这个状态(已装载但未运行),不清掉就永远起不来。
+        # 「启动」必须能安全地对着一个**正在录制**的服务敲(2026-10-29 修)
+        # ------------------------------------------------------------------
+        # 这里曾经是无条件的 bootout → bootstrap,理由是「job 已装载时裸
+        # bootstrap 会报 already loaded」。那条理由只在「已装载但进程没跑」时
+        # 成立,却被套用到了所有状态:bootout 会给正在跑的进程发 SIGTERM,
+        # 于是「启动」实际上变成了「先掐掉再拉起」。
+        # 2026-10-29 实测代价:一条 douyin start 让 2 路录制被中断;更糟的是
+        # bootout 记下的退出时刻会打开 launchd 的 ThrottleInterval(60 秒)
+        # 节流窗口,新实例要等满一分钟才 spawn,用户看到的是「重启失败」。
+        #   · 已装载 → kickstart 就够(不带 -k,进程在跑时是空操作)
+        #   · 未装载 → bootstrap 装载即可,KeepAlive 会立即把进程拉起来
+        #   · 端口被外人占着 → 不猜也不动手:那种情况只有 restart 有收尾流程
+        outsider = _outsider_pid()
+        if outsider:
+            return (False,
+                    "端口 %d 被非 launchd 实例(pid %d)占着,kickstart 拿不到它 —— "
+                    "请用「重启」,那边会先让它停录落历史再交回 launchd"
+                    % (_webui_port(), outsider), [])
+        if _service_status().get("managed"):
+            return True, "拉起指令已发出(launchd 名下已装载,直接拉起)", [
+                {"kind": "kickstart", "label": "拉起服务",
+                 "cmd": "launchctl kickstart %s 2>/dev/null" % q(target)},
+            ]
         return True, "启动指令已发出,服务将在数秒内就绪", [
-            {"kind": "bootout", "label": "卸载可能已装载的旧 job",
-             "cmd": "launchctl bootout %s 2>/dev/null" % q(target)},
-            {"kind": "pause", "wait_s": 1, "label": "等它卸载完", "cmd": "sleep 1"},
             {"kind": "bootstrap", "label": "按 plist 装载 launchd job",
-             "cmd": "launchctl bootstrap %s %s 2>/dev/null"
-                    % (q(domain), q(LAUNCHD_PLIST))},
-            {"kind": "pause", "wait_s": 1, "label": "等它装载完", "cmd": "sleep 1"},
+             "cmd": "launchctl bootstrap %s %s" % (q(domain), q(LAUNCHD_PLIST))},
             {"kind": "kickstart", "label": "拉起服务",
-             "cmd": "launchctl kickstart -k %s 2>/dev/null" % q(target)},
+             "cmd": "launchctl kickstart %s 2>/dev/null" % q(target)},
         ]
 
     return False, "未知操作:%s" % action, []
@@ -1784,6 +3266,77 @@ def _auth_verify(state):
         return r
     except Exception as e:
         return {"ok": False, "error": str(e)[:200]}
+
+
+def _auth_open_home(state):
+    """一键打开已登录抖音主页(复用扫码登录的专用 profile 与 CDP 注入)。"""
+    try:
+        import auth as auth_mod
+        return auth_mod.open_home(log=_log_line)
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+def _auth_restart_browser(state):
+    """显式关闭专用浏览器(下次打开按新的启动参数重建)。
+
+    「打开我的抖音」永不杀进程之后,这是唯一会让专用浏览器消失的入口 ——
+    新启动参数生效、或调试端口读不到需要恢复时用它。扫码登录中会被拒绝。
+    """
+    try:
+        import auth as auth_mod
+        return auth_mod.restart_browser(log=_log_line)
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+def _live_state(state, name):
+    """实时预览状态(按需独立拉流架构)。
+
+    供 /live/<主播> 弹出页轮询;对已存在的会话续期(keepalive) —— 页面关闭
+    即停止轮询,会话在 idle_timeout 秒后自动回收。页面据此显示
+    「建立连接 / 播放中 / 重连中 / 失败 / 未在录制」。
+    """
+    from urllib.parse import quote
+    cfg = state.get_config()
+    mon = next((m for m in cfg.get("monitors", []) if m.get("name") == name), None)
+    snap = state.get_status()
+    st = (snap.get("streamers") or {}).get(name) or {}
+    rec = (snap.get("recordings") or {}).get(name) or {}
+    lv = cfg.get("live_preview") or {}
+    enabled = bool(lv.get("enabled", False))
+    sess = live_preview_mod.status(cfg, name)
+    if sess.get("active"):
+        live_preview_mod.touch(name)      # 轮询即续期
+    return {
+        "ok": True,
+        "name": name,
+        "exists": mon is not None,
+        "live": bool(st.get("is_live")),
+        "recording": bool(rec.get("recording")),
+        "started_at": rec.get("started_at"),
+        "enabled": enabled,
+        "session": sess,                  # {active, state, error, attempt, started_at}
+        "ready": bool(enabled and sess.get("state") == "ready"),
+        "m3u8": f"/live-hls/{quote(name)}/live.m3u8",
+        "room_url": (f"https://live.douyin.com/{mon.get('web_rid')}"
+                     if mon and mon.get("web_rid") else ""),
+    }
+
+
+def _live_start(state, name):
+    """按需启动预览会话(POST /api/live/<主播>/start)。
+
+    闸门:预览开关已启 + 该主播正在录制(预览会话的流地址取自录制中的拉流)。
+    """
+    cfg = state.get_config()
+    if not (cfg.get("live_preview") or {}).get("enabled", False):
+        return {"ok": False, "name": name, "error": "实时预览未开启"}
+    snap = state.get_status()
+    rec = (snap.get("recordings") or {}).get(name) or {}
+    if not rec.get("recording"):
+        return {"ok": False, "name": name, "error": "该主播未在录制,无法预览"}
+    return live_preview_mod.ensure_start(cfg, name)
 
 
 def start(state: State, host: str, port: int):

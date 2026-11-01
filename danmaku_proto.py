@@ -853,20 +853,44 @@ class FansclubMessage(betterproto.Message):
 
 @dataclass
 class RoomRankMessage(betterproto.Message):
-    """
-    from https://github.com/scx567888/live-room-watcher/blob/master/src/main/pr
-    oto/douyin_hack/webcast/im/RoomRankMessage.proto 直播间排行榜
+    """直播间贡献榜(送礼榜)。
+
+    ⚠️ 2026-10-29 实测修正:上游 scx567888 那份 .proto 的字段号是错的
+    (把真实的分值榜写在 field 2),照抄解析出来 score 恒为空。用原始字节
+    wire 解码 + 与登录侧真值逐笔对齐后确认的真实结构:
+
+        field 1 = Common
+        field 2 = repeated { user }       空榜时只有"在榜用户"、没有任何分值
+        field 3 = repeated { user, score, rank, gap }   ← 真正的分值榜
+
+    字段自证:同一快照内 field5(gap) 严格等于 score[i] - score[i+1],
+    9 个名次连续 8 组全部吻合(见 tests/test_room_rank.py)。
+
+    分值单位 = 抖币,与登录侧实收礼物金额 1:1 相等(实测 3/3 精确命中)。
+    该消息对「匿名观众身份」下发,不受礼物通道(轻/完整)开关影响 ——
+    因此它是 full_only 场次里唯一还能拿到的礼物金额线索。
     """
 
     common: "Common" = betterproto.message_field(1)
-    ranks_list: List["RoomRankMessageRoomRank"] = betterproto.message_field(2)
+    users_list: List["RoomRankMessageUser"] = betterproto.message_field(2)
+    ranks_list: List["RoomRankMessageRoomRank"] = betterproto.message_field(3)
+
+
+@dataclass
+class RoomRankMessageUser(betterproto.Message):
+    """field 2:只有用户、没有分值(空榜/在榜候选)。"""
+
+    user: "User" = betterproto.message_field(1)
 
 
 @dataclass
 class RoomRankMessageRoomRank(betterproto.Message):
+    """field 3:一条榜位。score 单位=抖币,gap=与下一名的分差。"""
+
     user: "User" = betterproto.message_field(1)
-    score_str: str = betterproto.string_field(2)
-    profile_hidden: bool = betterproto.bool_field(3)
+    score: int = betterproto.int64_field(2)
+    rank: int = betterproto.int64_field(3)
+    gap: int = betterproto.int64_field(5)
 
 
 @dataclass

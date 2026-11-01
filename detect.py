@@ -85,6 +85,40 @@ def extract_stream_url(html: str):
     return None, None
 
 
+# ── 降级 reflow 页识别 ────────────────────────────────────────
+#
+# 抖音会对部分直播间返回一份「网页端不可观看」的降级落地页(实测 2026-10-13
+# 某主播):可见文案是「暂时无法在该页面观看 / 尝试在抖音内观看 / 打开APP」,
+# 页面里既没有 room.status、也没有任何 flv/m3u8 地址,体积约 26KB;而正常
+# 落地页 70~82KB 且两者齐全。成因在抖音侧(主播设置/房间限制),本地拉不到流,
+# 属「这台机器无从录制」,不是解析代码失手。
+#
+# 必须把它和「网络截断、偶发结构变化导致解析失败」区分对待:
+#   · 降级页 → 解析不出 status 是**预期结果**,标 unknown,不能判在播;
+#   · 其它异常 → 沿用旧的保守判开播(宁可多查一次,也不漏一场)。
+# 不区分的代价实测过一次:判定在播却没有流地址 → 巡检每 20s 复检、
+# 每 2min 重检测,连续空转约 3 小时,界面还一直显示「在播」。
+_VIDEO_EXT_RE = (".flv", ".m3u8")
+_DEGRADED_MARKERS = (
+    "暂时无法在该页面观看",
+    "请在抖音APP内观看",
+    "请在抖音 App 内观看",
+)
+_DEGRADED_MAX_LEN = 40960  # 正常落地页实测 ≥70KB,降级页约 26KB
+
+
+def is_degraded_page(html: str) -> bool:
+    """reflow 落地页是否为「网页端不可观看」的降级空壳页。"""
+    if not html:
+        return True
+    if any(m in html for m in _DEGRADED_MARKERS):
+        return True
+    # 结构兜底:既没有房间对象(ownerUserId)、也没有任何拉流后缀,且体积小得反常
+    return (len(html) < _DEGRADED_MAX_LEN
+            and "ownerUserId" not in html
+            and not any(ext in html for ext in _VIDEO_EXT_RE))
+
+
 _SEC_UID_RE = re.compile(r"^MS4wLjAB[A-Za-z0-9_-]{10,}$")
 
 
@@ -114,17 +148,21 @@ def probe_anchor(mon: dict):
 
 
 async def _fetch_room_info(client, loc: str):
-    """跟随 302 的 location 抓 reflow 落地页,提取 (status, stream_url, create_time)。
-    失败返回 (None, None, None)。create_time 顺手从同一响应解析,不产生额外请求。"""
+    """跟随 302 的 location 抓 reflow 落地页,提取 (status, stream_url, create_time, degraded)。
+    失败返回 (None, None, None, False)。create_time 顺手从同一响应解析,不产生额外请求。
+
+    末位的 degraded 表示该页是「抖音明确不给网页端看」的降级页(见 is_degraded_page)。
+    请求异常时返回 False,让上层沿用旧的保守判开播 —— 降级与否只有在拿到页面时才知道,
+    拿不到页面就当未知处理,不该顺手否掉一场可能是真直播的场次。"""
     try:
         resp = await client.get(loc, headers=HEADERS_302)
         if resp.status_code == 200:
             html = resp.text
             return (extract_room_status(html), extract_stream_url(html)[0],
-                    extract_create_time(html))
+                    extract_create_time(html), is_degraded_page(html))
     except Exception:
         pass
-    return None, None, None
+    return None, None, None, False
 
 
 async def check_302(client, anchor: str) -> dict:
@@ -138,8 +176,26 @@ async def check_302(client, anchor: str) -> dict:
     resp = await client.get(url, headers=HEADERS_302)
     if resp.status_code in (301, 302):
         loc = resp.headers.get("location", "")
-        status, stream_url, create_time = await _fetch_room_info(client, loc)
-        is_live = (status == 2) if status is not None else True  # 解析失败保守判开播
+        status, stream_url, create_time, degraded = await _fetch_room_info(client, loc)
+        if status is not None:
+            is_live = (status == 2)
+        elif degraded:
+            # 降级页:解析不出 status 是**预期结果**(抖音压根不给网页端看),
+            # 不是解析失手。此时判"无法判定"(unknown)而不是"在播" ——
+            # 否则会得到「在播却没有流地址」的永久假阳性:录制起不来,
+            # 巡检每隔 20s 复检一次空转(2026-10-13 实测连续空转约 3 小时)。
+            is_live = False
+        else:
+            is_live = True  # 解析失败保守判开播(避免漏报)
+        unknown = status is None and degraded
+        # 已下播(status=4)时 reflow 落地页里**仍然带着一个流地址**,但它带
+        # rtm_expr_tag=reflow_room_info,是占位地址 —— 实测 ffmpeg 拉它直接
+        # `Server returned 404 Not Found`。留着它很危险:上层一旦拿它启动录制,
+        # 就会「起来→404 秒退→重启 4 次→冷却 600s」无限循环,而界面上还因为
+        # is_live 显示着「直播中」(2026-09-18 某主播那次就是这么绕进去的)。
+        # 结论:不直播就不给地址,让上层没有机会去拉一个注定失败的东西。
+        if not is_live:
+            stream_url = None
         out = {
             "is_live": is_live,
             "status": status,
@@ -148,6 +204,10 @@ async def check_302(client, anchor: str) -> dict:
             "sec_uid": extract_sec_uid(loc) or str(anchor),
             "method": "302",
         }
+        if unknown:
+            # unknown 与 is_live=False 同时出现 = 「这轮没看清」,而不是「已下播」。
+            # 上层据此不动正在进行的状态(详见 monitor.py 检测循环的 unknown 分支)。
+            out["unknown"] = True
         if is_live and create_time:
             out["create_time"] = create_time  # 真实开播时间(仅直播中有意义)
         return out
@@ -156,8 +216,17 @@ async def check_302(client, anchor: str) -> dict:
     return {"is_live": False, "error": f"HTTP {resp.status_code}", "method": "302"}
 
 
-async def check_api(client, room_id: str, cookie: str, api_base: str) -> dict:
-    """room status API 确认,返回 status(2=直播)+ stream_url。"""
+async def check_api(client, web_rid: str, cookie: str, api_base: str,
+                    room_id=None) -> dict:
+    """room status API 确认,返回 status(2=直播)+ stream_url。
+
+    ⚠️ 第一个参数是 **web_rid**(`live.douyin.com/{数字}` 那串直播间号),
+    不是 reflow 落地页里那个 19 位 room_id。两者混用不会报错,只会**静默失效**:
+    实测把 room_id 当 web_rid 传,抖音返回 HTTP 200 + `status_code=4001038` +
+    `data.data=[]` —— 表现得像"房间不存在",实际是参数错位。2026-10-13 的代价是
+    三次矛盾校验全部误判为 no room data,一个假阳性直播态连续空转约 3 小时没能纠正。
+    room_id 只在有值时作为附加参数带上(实测 web_rid + room_id 组合可用)。
+    """
     params = {
         "aid": "6383",
         "app_name": "douyin_web",
@@ -170,11 +239,13 @@ async def check_api(client, room_id: str, cookie: str, api_base: str) -> dict:
         "browser_platform": "MacIntel",
         "browser_name": "Chrome",
         "browser_version": "126.0.0.0",
-        "web_rid": room_id,
+        "web_rid": web_rid,
     }
+    if room_id:
+        params["room_id"] = str(room_id)
     headers = {
         "User-Agent": UA_PC,
-        "Referer": f"https://live.douyin.com/{room_id}",
+        "Referer": f"https://live.douyin.com/{web_rid}",
         "Cookie": cookie,
     }
     resp = await client.get(api_base, params=params, headers=headers)
@@ -190,11 +261,14 @@ async def check_api(client, room_id: str, cookie: str, api_base: str) -> dict:
         ct = int(r0.get("create_time")) if r0.get("create_time") is not None else None
     except (TypeError, ValueError):
         ct = None
+    live = r0.get("status") == 2
     return {
-        "is_live": r0.get("status") == 2,
+        "is_live": live,
         "status": r0.get("status"),
-        "stream_url": _normalize_stream_url(r0.get("stream_url")),
-        "create_time": ct if r0.get("status") == 2 else None,
+        # 与 check_302 同一原则:**不直播就不给地址**。下播后 CDN 地址已失效,
+        # 留着它只会让录制端拉一个注定 404 的地址。
+        "stream_url": _normalize_stream_url(r0.get("stream_url")) if live else None,
+        "create_time": ct if live else None,
         "method": "api",
     }
 
@@ -256,11 +330,15 @@ def _normalize_stream_url(su):
 
 
 async def confirm_with_cookie(client, room_id, cfg, guard=None, anchor=None,
-                              reason="conflict", in_hotspot=False):
+                              reason="conflict", in_hotspot=False, web_rid=None):
     """强制用 Cookie 做一次 API 确认(供矛盾状态校验等场景调用)。
 
     与 check() 的区别:check() 是常规检测流程里的自动确认,这里是**主动发起**的
     专项校验,仍然要走同一道护栏 —— 场景特殊只豁免「热点门」,频率和配额照扣。
+
+    web_rid:主播的直播间号,API 唯一认的主键(详见 check_api 的说明)。缺它就
+    拿不到房间数据,调用方应先把 web_rid 补齐;这里宁可明确报 no_web_rid,
+    也不要退回拿 room_id 冒充 —— 那会重演「三次校验全部假失败」的老问题。
 
     返回 (result_dict, 护栏原因码);被拒绝或请求失败时 result 为 None。
     """
@@ -271,18 +349,21 @@ async def confirm_with_cookie(client, room_id, cfg, guard=None, anchor=None,
         cookie = _resolve_cookie(det) or cookie
     except Exception:
         pass
-    if not room_id or not cookie:
+    if not cookie:
         return None, "no_cookie"
+    if not web_rid:
+        return None, "no_web_rid"
 
     if guard is not None:
-        ok, why = guard.allow(anchor or room_id, reason=reason,
+        ok, why = guard.allow(anchor or web_rid, reason=reason,
                               in_hotspot=in_hotspot, has_cookie=True)
         if not ok:
             return None, why
-        guard.record(anchor or room_id)
+        guard.record(anchor or web_rid)
 
     try:
-        r = await check_api(client, room_id, cookie, det.get("api_base", ""))
+        r = await check_api(client, web_rid, cookie, det.get("api_base", ""),
+                            room_id=room_id)
     except Exception as e:
         return None, f"error:{type(e).__name__}"
     if r.get("error"):
@@ -309,10 +390,17 @@ async def check(client, anchor: str, cfg: dict, last_room_id=None,
         cookie = _resolve_cookie(det) or cookie
     except Exception:
         pass
-    if not room_id or not cookie:
+    # API 通道认的是 web_rid(直播间号),不是 reflow 页里的 room_id ——
+    # 传错只会静默拿到 status_code=4001038 + 空 data(详见 check_api 说明)。
+    # check() 的 anchor 由 probe_anchor() 产出,正常情况下就是 web_rid。
+    web_rid = str(anchor or "").strip()
+    if not web_rid.isdigit() or not cookie:
         return r302
 
-    need = mode == "api" or (mode == "mix" and (r302.get("is_live") or r302.get("error")))
+    # unknown(降级页)也算「需要问一句」:302 侧看不清的时候,恰恰最值得花一次
+    # Cookie 去问个明白 —— API 可能直接给出 status 与可拉流地址,顺带把录制救回来。
+    need = mode == "api" or (mode == "mix" and (
+        r302.get("is_live") or r302.get("error") or r302.get("unknown")))
     if not need:
         return r302
 
@@ -329,12 +417,17 @@ async def check(client, anchor: str, cfg: dict, last_room_id=None,
         guard.record(anchor)
 
     try:
-        r_api = await check_api(client, room_id, cookie, det.get("api_base", ""))
+        r_api = await check_api(client, web_rid, cookie, det.get("api_base", ""),
+                                room_id=room_id)
     except Exception:
         return r302
 
     if r_api.get("error"):
         return r302
+
+    # API 判在播却没给地址时,别把 302 通道已经拿到的地址扔了 —— 那等于自己掐断自己的流
+    if r_api.get("is_live") and not r_api.get("stream_url") and r302.get("stream_url"):
+        r_api["stream_url"] = r302["stream_url"]
 
     r_api["room_id"] = room_id
     r_api["sec_uid"] = r302.get("sec_uid") or str(anchor)

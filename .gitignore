@@ -14,11 +14,14 @@ config.prev.json.bak-*
 *.bak-*
 hotspots.json
 hotspot_events.json
+# 本地 UI 草稿(含真实主播名,2026-10-16 敏感词门拦截后入库排除)
+design_drafts/
 
 # ---------- ③ 媒体与录制品（体积巨大，且含主播内容） ----------
 recordings/
 recordings_backup_*/
 previews/
+previews-live/
 spool/
 *.flv
 *.ass
@@ -31,6 +34,10 @@ logs/
 *.log
 launchd.*.log
 
+# 运行态瞬时数据(2026-10-22 硬编改造):画质档位状态 + ffmpeg -progress 文件。
+# 含本机负载历史,且属于「跑出来的东西」,不入库。
+state/
+
 # ---------- ⑤ 环境与缓存 ----------
 .venv/
 venv/
@@ -42,3 +49,6 @@ build/
 .DS_Store
 .vscode/
 .idea/
+
+# ---------- ⑥ 智能体宿主数据(WorkBuddy automation 记忆等,绝不进仓库) ----------
+.workbuddy/

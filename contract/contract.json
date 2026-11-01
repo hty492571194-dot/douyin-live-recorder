@@ -1,0 +1,192 @@
+{
+  "contract_version": "1.7.0",
+  "updated_at": "2026-10-29",
+  "producer": "douyin-monitor(录制端,本契约真源)",
+  "consumer": "asrclip(转录端,只读消费方)",
+  "channel": "NAS 文件面 <NAS根>/_对接/,与「直播回放」平级;两机零 HTTP",
+  "files": [
+    {
+      "path": "直播回放/<主播>/<日期>/<主播名>-<YYYYmmdd-HHMMSS>-NNN.flv",
+      "kind": "video",
+      "complete_when": "父日期目录旁存在 <日期>.meta.json 且分片不再增长",
+      "notes": "ffmpeg -f segment 分片,约 38 分钟/片;归档为整目录复制+同名同大小续传;编码为 H.264(High),分辨率/码率见 capabilities.video"
+    },
+    {
+      "path": "直播回放/<主播>/<日期>/<同前缀>.ass",
+      "kind": "subtitle",
+      "complete_when": "同 flv;finalize 后不再变化",
+      "notes": "外挂字幕,与分片同名同目录;PlayRes=该分片真实像素,跨分片可能不同,解析时不要假设整场一致"
+    },
+    {
+      "path": "直播回放/<主播>/<日期>/.meta/<基名>.danmaku.jsonl",
+      "kind": "events",
+      "complete_when": "同 flv;jsonl 永不改写",
+      "notes": "弹幕+礼物同一文件,type=chat/gift/member 区分;前缀必须等于视频基名;gift 行自 2026-10-29 起多一个 channel 字段,取值固定为 light(轻礼物通道)—— 录制端礼物口径已统一为轻通道,完整通道事件不落盘;消费方按 type=gift 全量消费即可,无需按 channel 过滤。注意:轻通道协议本身不含送礼人昵称/uid/礼物名(user/uid 恒空、gift 可能形如「礼物#<id>」),这是协议边界而非采集缺陷"
+    },
+    {
+      "path": "直播回放/<主播>/<日期>/.meta/<基名>.align.json",
+      "kind": "alignment",
+      "complete_when": "同 flv;finalize 后含 summary",
+      "notes": "锚点/偏移/缺口/汇总;时间基校准权威快照"
+    },
+    {
+      "path": "直播回放/<主播>/<日期>/.meta/<基名>.giftwatch.jsonl",
+      "kind": "diagnostics",
+      "optional": true,
+      "notes": "礼物健康度诊断记录(按需出现,可能整场缺失):每条形如 {code, level, detail, silent_min, at, wall, snapshot};level ∈ fault(真实丢数据)/suspect(录到但不完整)/quiet(通道态说明)/muted(证据留存)。snapshot.light 是轻通道三段账 {recv, kept, parse_errors, write_errors, field_missing, full_ignored}—— 它回答「轻通道给了多少 vs 录下多少」,消费方可据此判断该场礼物是否为完整集合"
+    },
+    {
+      "path": "直播回放/<主播>/<日期>/.meta/<基名>.giftdisplay.json",
+      "kind": "presentation",
+      "optional": true,
+      "notes": "礼物展示计划(字体/槽位/分段文本/车道/延迟/片尾溢出)。与 .ass 里的礼物 Dialogue 来自同一份计划;字段含 rule_version/layout_profile/segments[]/tail_overflow/stats。仅竖屏 portrait-v1 布局生成;文件缺失或版本不认识时按原始 jsonl 消费,不得据此判定无礼物"
+    },
+    {
+      "path": "直播回放/<主播>/<日期>/.meta/<基名>.giftrank.jsonl",
+      "kind": "diagnostics",
+      "optional": true,
+      "notes": "贡献榜快照(type=rank,每分钟最多一条,榜面不变不写):ranks[] 含 rank/uid/name/score/gap,score 单位=抖币且等于该用户累计送礼金额(1:1)。它由匿名连接收到,因此在「完整通道不可见」的场次里同样存在,是那类场次唯一的礼物金额线索;只覆盖前 20 名,是下界而非总额。文件可能整场缺失,消费方必须容错;服务端可能交替下发不同榜单视图(实测相邻快照第一名在两人间跳动),按 uid 取 score 最大值,勿假设跨快照单调"
+    },
+    {
+      "path": "直播回放/<主播>/<日期>/session.json",
+      "kind": "contract-marker",
+      "optional": true,
+      "notes": "契约版本随数据走:state=recording|finalized,含 contract_version/producer_host/prefixes[];消费方当前不读,留作排查自证"
+    },
+    {
+      "path": "直播回放/<主播>/<日期>.meta.json",
+      "kind": "ready-signal",
+      "complete_when": "归档成功后原子写",
+      "notes": "🔴 唯一「可消费」判据:字段 streamer/room_id/start/end(Unix 秒);无信号的日期目录是传输中半成品,绝不可消费"
+    }
+  ],
+  "naming": {
+    "session_key": "<主播>/<YYYY-MM-DD>/<基名>",
+    "prefix": "<主播名>-<YYYYmmdd-HHMMSS>",
+    "date_dir": "YYYY-MM-DD,归属开播日,不随跨天翻转",
+    "ready_signal": "<日期>.meta.json",
+    "ready_rule": "归档成功才原子写;提前写=半成品被消费,事故级"
+  },
+  "timestamps": [
+    "唯一时间基:场次相对秒 = (事件 ts 毫秒 − anchors[\"000\"]) / 1000;消费方不得自行重推",
+    "anchors 来自 align.json:分片序号 → 该分片首包墙钟毫秒;anchors[\"000\"] 即场次 0 点",
+    "anchors 为空 = 无事件对齐依据,事件全跳过(静默,不算错误,体现为空产物)",
+    "align.json 新增 clock_offset_ms(v1.3.0,可选):源时间戳模式下「推流端相对毫秒 → 绝对墙钟」的校准偏移。anchors 已按它还原成墙钟毫秒,**消费方语义不变** —— 仍按 anchors 取场次 0 点,不需要读这个字段。",
+    "音画同步保证(v1.3.0):录制端不再逐包打墙钟,FLV tag 保留推流端时间戳,故「音频采样数 ÷ 采样率」与「视轨跨度」一致(实测差 < 0.15s);断流超过 0.5s 时录制端自动补等长静音,音轨时间轴与视轨严格对齐。消费方**不需要**再按片段猜着补静音。",
+    "jsonl 的 ts = 服务器毫秒,对齐唯一依据",
+    "jsonl 的 ts_local = 本地接收毫秒,仅用于延迟/堆积评估,禁止用于对齐",
+    "FLV tag 时间戳是 31 位截断(mod 2^31)不是 32 位;epoch32 ∈ [2^31,2^32) 窗口按 32 位解会偏 ±24.8 天",
+    "服务器-本地时钟漂移指数平滑后写 align.drift_ms",
+    "弹幕生效偏移(秒)= config_offset + global_offset + per_segment[分片]",
+    "礼物偏移 = 弹幕偏移 + (gift_config_offset + gift_global_offset + gift_per_segment),是叠加在弹幕之上的额外量",
+    "jsonl 永不改写,偏移只在生成 .ass 时应用;align.json 是校准权威快照",
+    "ASS 行上移用 \\move;事件按开始时间稳定排序",
+    "已知质量事实:ASR 产物存在秒级偏差、切片 mp4 约 3.7s 音画漂移(对端侧测量)。v1.3.0 起录制端已修正音轨时间轴,该漂移的**录制端成因**已消除,对端复测后可下调预期"
+  ],
+  "capabilities": {
+    "recording": "ffmpeg 分片拉流(segment_time=2300s),主播/日期两级目录",
+    "video": "H.264(High)编码,默认 VideoToolbox 硬件编码;视频码率可配(默认 1200 kbps),音频固定 AAC 128 kbps;分辨率 4 档(原生/1080P/864/720,只缩不放,横竖自动选向)。过载时录制端会自动降档(分辨率+码率),故同一场次内不同分片的尺寸/码率可能不同 —— 消费方一律以每个分片自身 onMetaData 为准,不得假设整场一致",
+    "danmaku": "WebSocket 匿名单连接抓取(弹幕链路必须匿名)",
+    "gift": "与弹幕同一 jsonl,type=gift;无独立礼物 API。礼物口径固定为抖音**轻礼物通道**(WebcastLightGiftMessage)——匿名连接唯一收得到的那条;完整通道事件不落盘,故 jsonl 里 gift 行恒为轻通道数据",
+    "subtitle": "ASS 外挂字幕(队列样式),与分片同名同目录",
+    "archive": "整目录复制 + 同名同大小续传 + 空间预检;archived 为终态",
+    "ready_signal": "<日期>.meta.json 就绪信号",
+    "interop_dirs": "_对接/{contract(含 NOTICE.md 变更通告),诊断包,问题反馈(含已处理/)} 信箱",
+    "gift_display": {
+      "version": "1.0.0",
+      "layout_profile": "portrait-v1",
+      "artifact": ".meta/<基名>.giftdisplay.json (optional)",
+      "doc": "字幕礼物展示限流部署方案-竖屏版-2026-10-29.md",
+      "enabled": true,
+      "slow_min_diamond": 99,
+      "high_priority_diamond": 1000,
+      "promote_min_count": 10,
+      "slots_total": 14,
+      "slow_preferred_slots": 3,
+      "reference_width": 1080,
+      "reference_height": 1920,
+      "top_margin": 60,
+      "side_margin": 48,
+      "row_height": 38,
+      "max_area_ratio": 0.4,
+      "slow_font": 38,
+      "fast_font": 30,
+      "slow_font_min": 32,
+      "fast_font_min": 26,
+      "slow_hold_sec": 5.0,
+      "slow_hold_busy_sec": 3.0,
+      "slow_hold_min_sec": 2.5,
+      "fast_hold_sec": 1.5,
+      "fast_hold_mid_sec": 1.0,
+      "fast_hold_busy_sec": 0.8,
+      "fast_hold_min_sec": 0.6,
+      "merge_window_sec": 3.0,
+      "max_segments": 6,
+      "min_segment_sec": 0.6,
+      "slow_combo_max_sec": 8.0,
+      "fast_combo_max_sec": 3.0,
+      "unknown_price_lane": "slow",
+      "anonymous_merge": false,
+      "golden_fixture": "contract/fixtures/gift_display_golden.json"
+    },
+    "gift_health": {
+      "scope": "light",
+      "fields": [
+        "ts",
+        "gift",
+        "diamond",
+        "count"
+      ],
+      "doc": "轻通道只承诺上述 4 个字段;送礼人昵称/uid/礼物名协议不下发,不参与完整性判定",
+      "artifact": "history.gift_integrity.light(本机历史,不进 NAS 产物)",
+      "status_values": [
+        "complete",
+        "partial",
+        "field_only",
+        "channel_off"
+      ],
+      "status_hint": "channel_off = 本场服务端未下发轻礼物(平台侧开关,不是录制故障);partial = 收到了但没录全(解析失败/写盘失败/字段缺项/条数对不上);field_only = 事后补算,拿不到实时收到数,只验字段"
+    }
+  },
+  "producer_duties": {
+    "notice_channel": "_对接/contract/NOTICE.md(最新条目置顶,与契约快照同目录同批投递)",
+    "rule": "凡调整任何「产出产物」的形态或语义 —— files 清单内的文件(新增/改名/字段/完成态判据)、naming 命名规则、timestamps 口径、capabilities 行为、diagnostics 诊断包结构 —— 调整的同时必须履行:",
+    "steps": [
+      "① 升级 contract_version 并在 CHANGELOG.md 加条目(minor=向后兼容加法;major=删改语义,两阶段发布 deprecated 挂 ≥2 周)",
+      "② 跑 scripts/notify_backend.py \"<变更摘要>\" 写变更通告并自动投递契约三件套(contract.json + CHANGELOG.md + NOTICE.md)到 _对接/contract/,sha256 回读校验",
+      "③ 守卫兜底:scripts/check_contract_sync.py 与 tests/test_contract_sync.py 拦截「代码改了契约没改/版本升了 CHANGELOG 没写」"
+    ],
+    "consumer_hint": "消费方读取素材或对接状态时顺带读 NOTICE.md 顶部条目;条目头格式 '## [YYYY-MM-DD HH:MM] <类型> — <摘要>',类型 = 产物|通道|停机|其他"
+  },
+  "quality_facts": [
+    "匿名侧只能收到轻礼物通道的事件(两条通道是服务端事件级互斥路由,不重叠):礼物数偏少 ≠ 解析 bug,金额只少不错",
+    "礼物金额 = diamond × count,单位抖币",
+    "「没收到礼物」≠「没人送礼」:判定需弹幕活跃度对照(≥2 条/分钟)",
+    "history.gift_integrity.ratio = 0 只代表无礼物事件;是否「服务端未下发轻通道」看 gift_integrity.gift_channel(full_only=整场未下发)与 gift_integrity.light.status",
+    "部分早期日期目录没有 <日期>.meta.json(历史遗留):无就绪信号一律跳过,不要补消费猜测",
+    "同一场次内分辨率可能不同(自动降档所致):每片按自身 onMetaData 取 PlayRes/尺寸,切片与 ASR 无需特殊处理",
+    "硬编产物与软编产物在容器/时间基/锚点上完全等价(实测四档帧数与墙钟 PTS 一致),仅同码率画质略有差异"
+  ],
+  "diagnostics": {
+    "delivery": "_对接/诊断包/诊断包-<session_key 清洗>-<ts>.zip + 同名 .manifest.sha256",
+    "contents": [
+      "manifest.json(原始 session_key/定位结果/内部文件哈希表)",
+      "status.json(录制端 /api/status 快照,服务离线则注明)",
+      "ffmpeg-err-tail.log(≤100 行尾部)",
+      "history-entry.json(录制历史对应条目)",
+      "files.tsv(场次文件清单:相对路径+大小+mtime+sha256 前 8 位)",
+      "align-key.json(anchors/gaps/drift_ms/summary)"
+    ],
+    "files_hash_policy": "视频分片按 大小+mtime 对账(sha8 留空,避免 SMB 全量读);sidecar 与字幕做 sha256 前 8 位",
+    "trigger": "对端反馈包 hint/suspect_files 指向素材问题,或人工要求时;命令 douyin diagnose \"<主播>/<日期>[/<stem>]\""
+  },
+  "security": [
+    "「直播回放」消费方绝对只读,不写/不删/不改名",
+    "录制端绝不在 _对接/ 之外写 NAS",
+    "_对接/ 必须与「直播回放」平级",
+    "一切写入原子(临时文件 + rename)",
+    "两机零 HTTP:两端服务都只监听各自本机回环,不得远程调用、不得改绑通配地址",
+    "问题反馈/ 主目录只取不走:消费=同名移入 已处理/,绝不删改对端原始包",
+    "session_key 只从 JSON 内容读,绝不解析反馈包文件名(清洗不可逆)"
+  ]
+}

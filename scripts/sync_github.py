@@ -58,6 +58,10 @@ GENERIC_PATTERNS = {
 SKIP_EXT = (".pyc", ".flv", ".ass", ".png", ".jpg", ".jpeg", ".gif", ".webp",
             ".ico", ".woff", ".woff2", ".ttf", ".zip", ".gz", ".mp4", ".jsonl")
 
+# 第三方产物目录:不参与「项目私有值」匹配(压缩代码里偶然出现短串会永久误报),
+# 但通用凭据模式照常扫描 —— 安全不打折。
+VENDOR_VALUE_SKIP = ("static/vendor/",)
+
 
 # ---------------------------------------------------------------- 禁词集
 def worth_blocking(v):
@@ -120,20 +124,25 @@ def is_synthetic(v):
     return any(s in low for s in SYNTHETIC)
 
 
-def scan_text(text, values):
-    """返回 [(类别, 打码片段, 行号)]。"""
+def scan_text(text, values, skip_values=False):
+    """返回 [(类别, 打码片段, 行号)]。
+
+    skip_values=True 时只跑通用凭据模式,跳过「项目私有值」匹配 —— 供
+    static/vendor/ 下第三方压缩产物使用(见 VENDOR_VALUE_SKIP 注释)。
+    """
     hits = []
-    for kind, vals in values.items():
-        for v in vals:
-            if is_synthetic(v):
-                continue
-            start = 0
-            while True:
-                i = text.find(v, start)
-                if i < 0:
-                    break
-                hits.append((kind, mask(v), text[:i].count("\n") + 1))
-                start = i + len(v)
+    if not skip_values:
+        for kind, vals in values.items():
+            for v in vals:
+                if is_synthetic(v):
+                    continue
+                start = 0
+                while True:
+                    i = text.find(v, start)
+                    if i < 0:
+                        break
+                    hits.append((kind, mask(v), text[:i].count("\n") + 1))
+                    start = i + len(v)
     for kind, rx in GENERIC_PATTERNS.items():
         for m in rx.finditer(text):
             raw = m.group(m.lastindex) if m.lastindex else m.group(0)
@@ -166,7 +175,8 @@ def scan_repo(values, files=None):
                 text = f.read()
         except OSError:
             continue
-        for kind, frag, line in scan_text(text, values):
+        skip_values = any(rel.startswith(p) for p in VENDOR_VALUE_SKIP)
+        for kind, frag, line in scan_text(text, values, skip_values=skip_values):
             out.append((rel, kind, frag, line))
     return out
 

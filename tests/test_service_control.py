@@ -45,15 +45,19 @@ class TestServiceControl(unittest.TestCase):
         self.calls = []
         subprocess.Popen = self._fake_popen
         self.orig_plist = webui.LAUNCHD_PLIST
-        # 默认「端口上没有外来实例」,让每个用例从确定的状态出发;要测清场分支的
-        # 用例会自己覆盖它。
+        self.orig_status = webui._service_status
+        # 默认「端口上没有外来实例、job 未装载」,让每个用例从确定的状态出发;
+        # 要测清场/已装载分支的用例会自己覆盖它。
         self.orig_outsider = webui._outsider_pid
         webui._outsider_pid = lambda: None
+        webui._service_status = lambda: {"managed": False, "running": False,
+                                         "source": None, "pid": None}
 
     def tearDown(self):
         subprocess.Popen = self.orig_popen
         webui.LAUNCHD_PLIST = self.orig_plist
         webui._outsider_pid = self.orig_outsider
+        webui._service_status = self.orig_status
 
     def _fake_popen(self, args, **kw):
         self.calls.append((args, kw))
@@ -102,17 +106,46 @@ class TestServiceControl(unittest.TestCase):
         self.assertLess(cmd.index("kill -TERM"), cmd.index("kill -KILL"))
         self.assertLess(cmd.index("kill -KILL"), cmd.index("kickstart"))
 
-    def test_start_unloads_before_bootstrap(self):
-        """job 已装载时裸 bootstrap 会报 already loaded,必须先 bootout。
+    def test_start_never_boots_out(self):
+        """start 绝不能先 bootout:那一步会给正在录制的进程发 SIGTERM。
 
-        界面上「启动」多半就出现在这个状态(已装载但未运行),不清掉就永远起不来。
+        这条规则是 2026-10-29 用一次真实事故换来的 —— 无条件 bootout → bootstrap
+        让一条 douyin start 中断了 2 路录制,还顺手打开 60 秒的 ThrottleInterval
+        节流窗口,新实例要等一分钟才 spawn(表现成「重启失败」)。
         """
+        for managed in (False, True):
+            webui._service_status = lambda m=managed: {
+                "managed": m, "running": m,
+                "source": "launchd" if m else None, "pid": 4242 if m else None}
+            self.calls.clear()
+            ok, _ = webui._service_control("start")
+            self.assertTrue(ok)
+            cmd = self._spawn_call()[0][2]
+            self.assertNotIn("bootout", cmd, "start 又开始卸载 job 了")
+            self.assertNotIn("kickstart -k", cmd, "start 不该杀掉在跑的实例")
+
+    def test_start_when_loaded_is_plain_kickstart(self):
+        """已装载(哪怕进程没跑)只 kickstart —— 裸 bootstrap 会报 already loaded,
+        但解法是把 job 拉起来,不是先卸载再装载。"""
+        webui._service_status = lambda: {"managed": True, "running": False,
+                                         "source": "launchd", "pid": None}
         ok, _ = webui._service_control("start")
         self.assertTrue(ok)
-        args, _ = self._spawn_call()
-        self.assertIn("bootout", args[2])
-        self.assertIn("bootstrap", args[2])
-        self.assertLess(args[2].index("bootout"), args[2].index("bootstrap"))
+        cmd = self._spawn_call()[0][2]
+        self.assertIn("kickstart", cmd)
+        self.assertNotIn("bootstrap", cmd)
+
+    def test_start_refuses_when_port_held_by_outsider(self):
+        """端口被非托管实例占着:拒绝执行,让人去用 restart。
+
+        硬 bootstrap 只会得到一个崩溃循环(新实例 bind 失败 → KeepAlive 重拉),
+        而真正该做的是先让那个实例停录落历史,那是 restart 的收尾流程。
+        """
+        webui._outsider_pid = lambda: 24190
+        ok, msg = webui._service_control("start")
+        self.assertFalse(ok)
+        self.assertIn("24190", msg)
+        self.assertEqual(self.calls, [], "拒绝时不该发出任何命令")
 
     def test_stop_uses_bootout(self):
         ok, _ = webui._service_control("stop")

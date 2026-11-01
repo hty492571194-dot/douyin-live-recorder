@@ -17,8 +17,23 @@ from schedule import HotspotStore
 
 
 def _ts(day, h, m):
-    """构造 2026-08 某天 hh:mm 的本地时间戳。"""
-    return datetime(2026, 8, day, h, m).timestamp()
+    """构造「最近一个该日 hh:mm」的本地时间戳 —— 基准跟随当前月份。
+
+    不能写死 2026-08 这类固定日期:`decay()` 用的是真实 `time.time()`,
+    一旦固定基准距今超过 30 天,「会话 30 天未活动」就会把它们全判为过期,
+    测试会在某一天自动烂成红灯(与时间无关的代码改动也会连带报红)。
+    这里取「当前月该日;若该日尚未到来则取上月同日」,保证落在最近 30 天内。
+    """
+    now = datetime.now()
+    try:
+        dt = datetime(now.year, now.month, day, h, m)
+    except ValueError:          # day 超出当月天数(如 2 月 31 日)
+        dt = datetime(now.year, now.month, 28, h, m)
+    if dt > now:
+        month = now.month - 1 or 12
+        year = now.year - 1 if now.month == 1 else now.year
+        dt = datetime(year, month, day, h, m)
+    return dt.timestamp()
 
 
 CFG = {
@@ -123,24 +138,35 @@ class TestHotspotStore(unittest.TestCase):
         self.assertEqual(sorted(w["center"] for w in ws), [840, 1200])
 
     def test_analyze_recency_weight(self):
-        """近 3 天事件权重 ×2:近期簇强度压过更早的簇,排到第一位。"""
+        """近 3 天事件权重 ×2:近期簇强度压过更早的簇,排到第一位。
+
+        事件时间一律相对 now 构造。⚠️ 早期版本用 `_ts(16, 16, 12)` 这类日历日,
+        隐含假设「当月 16 日在近 3 天内」—— 只有每月 16~18 号跑才成立:
+        2026-10-10 实测红灯(16 日尚未到来 → `_ts` 退到上月,两组事件的远近
+        关系整个颠倒,期望的近期簇反而成了更早的那簇)。改成相对时间后与日历无关。
+        """
         store = self.make_store()
-        now = _ts(16, 16, 12)
+        now = datetime.now().timestamp()
+        day = 86400
+        # 聚类维度是「日内分钟」而非日期,所以两组事件除了时间上一近一远,
+        # 时钟位置也必须错开(这里差 5 小时 > analysis_cluster_min 90),
+        # 否则减整天数会让两组落在同一时刻、被并成一簇(实测只剩 1 个窗口)。
+        base = now - 2 * 3600          # 近期簇基准(2 小时前,避开零点附近)
+        old = now - 6 * day + 5 * 3600  # 旧簇:约 5.8 天前,时钟 +5 小时
         store.events["a"] = [
-            {"ts": _ts(10, 10, 0), "src": "create_time"},    # 6 天前 10:00 ×3 → 强度 3
-            {"ts": _ts(10, 10, 5), "src": "create_time"},
-            {"ts": _ts(10, 10, 10), "src": "create_time"},
-            {"ts": _ts(16, 16, 2), "src": "create_time"},    # 今天 16:02~16:12 ×3 → 强度 6
-            {"ts": _ts(16, 16, 7), "src": "create_time"},
-            {"ts": _ts(16, 16, 12), "src": "create_time"},
+            {"ts": old - 3600, "src": "create_time"},   # 旧簇 ×3 → 强度 3
+            {"ts": old - 1800, "src": "create_time"},
+            {"ts": old, "src": "create_time"},
+            {"ts": base - 600, "src": "create_time"},   # 近 3 天 ×3 → 权重 ×2 强度 6
+            {"ts": base - 300, "src": "create_time"},
+            {"ts": base, "src": "create_time"},
         ]
         self.assertTrue(store.analyze("a", now))
         ws = store.windows("a")
         self.assertEqual(len(ws), 2)
-        self.assertEqual(ws[0]["center"], 967)   # 近期簇加权中心
-        self.assertEqual(ws[0]["strength"], 6)
-        self.assertEqual(ws[1]["center"], 605)   # 10:00/10:05/10:10 均值
+        self.assertEqual(ws[0]["strength"], 6, "近期簇应因权重 ×2 排到第一位")
         self.assertEqual(ws[1]["strength"], 3)
+        self.assertNotEqual(ws[0]["center"], ws[1]["center"])
 
     def test_analyze_skips_when_few_events(self):
         """事件 < 5 → analyze 返回 False,保留现槽位。"""

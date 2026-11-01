@@ -142,12 +142,18 @@ class TestHistoryArchive(unittest.TestCase):
         self.assertEqual(e["archive"]["target"], "external")
 
     # ── 4. 打开白名单(多环境适配,防任意路径)──
-    def test_allowed_roots_three_envs(self):
+    def test_allowed_roots_covers_all_envs(self):
+        """暂存根 + 默认根 + 项目内老场次 + NAS + 外接盘(2026-10-30 暂存外迁后)。
+
+        项目内 `recordings/` 必须留在白名单里:迁移前的老场次还在那儿,
+        去掉就会让历史页对旧文件 403(表现为「文件不存在」,素材其实还在)。
+        """
         roots = webui._allowed_roots(self.cfg)
-        self.assertIn(os.path.realpath(self.rec), roots)
-        self.assertIn(os.path.realpath(self.nas), roots)
-        self.assertIn(os.path.realpath(self.ext), roots)
-        self.assertEqual(len(roots), 3)
+        self.assertIn(os.path.realpath(self.rec), roots)      # 配置的暂存根
+        self.assertIn(os.path.realpath(self.nas), roots)      # NAS 挂载点
+        self.assertIn(os.path.realpath(self.ext), roots)      # 外接硬盘
+        self.assertIn(os.path.realpath(os.path.join(webui.BASE, "recordings")), roots)
+        self.assertEqual(len(roots), len(set(roots)), "白名单不该有重复项")
 
     def test_allowed_roots_excludes_others(self):
         roots = webui._allowed_roots(self.cfg)

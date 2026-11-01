@@ -1,0 +1,542 @@
+{
+ "schema": 1,
+ "rule_version": "1.0.0",
+ "layout_profile": "portrait-v1",
+ "note": "合成样例：主播A/观众甲乙/合成礼物。下游跑通即视为与录制端一致。",
+ "input": {
+  "events": [
+   {
+    "ts": 1793200001000,
+    "type": "gift",
+    "gift": "礼物#1001",
+    "diamond": 1,
+    "count": 1,
+    "uid": "",
+    "user": "",
+    "channel": "light"
+   },
+   {
+    "ts": 1793200001500,
+    "type": "gift",
+    "gift": "礼物#1001",
+    "diamond": 1,
+    "count": 1,
+    "uid": "",
+    "user": "",
+    "channel": "light"
+   },
+   {
+    "ts": 1793200002000,
+    "type": "gift",
+    "gift": "礼物#1001",
+    "diamond": 1,
+    "count": 1,
+    "uid": "",
+    "user": "",
+    "channel": "light"
+   },
+   {
+    "ts": 1793200002200,
+    "type": "gift",
+    "gift": "礼物#1002",
+    "diamond": 98,
+    "count": 1,
+    "uid": "",
+    "user": "",
+    "channel": "light"
+   },
+   {
+    "ts": 1793200002400,
+    "type": "gift",
+    "gift": "礼物#1003",
+    "diamond": 99,
+    "count": 1,
+    "uid": "",
+    "user": "",
+    "channel": "light"
+   },
+   {
+    "ts": 1793200002600,
+    "type": "gift",
+    "gift": "礼物#1005",
+    "diamond": 0,
+    "count": 1,
+    "uid": "",
+    "user": "",
+    "channel": "light"
+   },
+   {
+    "ts": 1793200003000,
+    "type": "gift",
+    "gift": "礼物#1001",
+    "diamond": 1,
+    "count": 1,
+    "uid": "u1",
+    "user": "观众甲",
+    "channel": "full"
+   },
+   {
+    "ts": 1793200004000,
+    "type": "gift",
+    "gift": "礼物#1001",
+    "diamond": 1,
+    "count": 5,
+    "uid": "u1",
+    "user": "观众甲",
+    "channel": "full"
+   },
+   {
+    "ts": 1793200005000,
+    "type": "gift",
+    "gift": "礼物#1001",
+    "diamond": 1,
+    "count": 9,
+    "uid": "u1",
+    "user": "观众甲",
+    "channel": "full"
+   },
+   {
+    "ts": 1793200009000,
+    "type": "gift",
+    "gift": "礼物#1001",
+    "diamond": 1,
+    "count": 12,
+    "uid": "u1",
+    "user": "观众甲",
+    "channel": "full"
+   },
+   {
+    "ts": 1793200009500,
+    "type": "gift",
+    "gift": "礼物#1004",
+    "diamond": 30000,
+    "count": 1,
+    "uid": "u2",
+    "user": "观众乙",
+    "channel": "full"
+   },
+   {
+    "ts": 1793200010000,
+    "type": "gift",
+    "gift": "礼物#9999",
+    "diamond": 0,
+    "count": 1,
+    "uid": "",
+    "user": "",
+    "channel": "light"
+   }
+  ],
+  "gift_dict": {
+   "1001": {
+    "name": "小心心",
+    "diamond": 1
+   },
+   "1002": {
+    "name": "闪烁星河",
+    "diamond": 98
+   },
+   "1003": {
+    "name": "亲吻",
+    "diamond": 99
+   },
+   "1004": {
+    "name": "嘉年华",
+    "diamond": 30000
+   },
+   "1005": {
+    "name": "免费祝福",
+    "diamond": 0
+   }
+  },
+  "segments": [
+   {
+    "idx": 0,
+    "start_ms": 0,
+    "end_ms": 8000
+   },
+   {
+    "idx": 1,
+    "start_ms": 8000,
+    "end_ms": 60000
+   }
+  ],
+  "origin_ms": 1793200000000
+ },
+ "expected": {
+  "rule_version": "1.0.0",
+  "layout_profile": "portrait-v1",
+  "cfg": {
+   "slow_min_diamond": 99,
+   "high_priority_diamond": 1000,
+   "slots_total": 14,
+   "slow_preferred_slots": 3,
+   "promote_min_count": 10,
+   "merge_window_sec": 3.0,
+   "anonymous_merge": false
+  },
+  "segments": [
+   {
+    "idx": 0,
+    "start_ms": 0,
+    "end_ms": 8000,
+    "items": [
+     {
+      "seg": 0,
+      "slot": 0,
+      "borrowed_slot": false,
+      "start_ms": 1000,
+      "end_ms": 2500,
+      "ready_ms": 1000,
+      "delay_ms": 0,
+      "lane": "fast",
+      "price_lane": "fast",
+      "priority": 2,
+      "channel": "light",
+      "merged": false,
+      "price_known": true,
+      "gift_id": 1001,
+      "name": "小心心",
+      "diamond": 1,
+      "count": 1,
+      "user": "",
+      "uid": "",
+      "key": "light|0",
+      "source_event_indexes": [
+       0
+      ],
+      "segments": [
+       {
+        "t_ms": 1000,
+        "text": "小心心 ×1"
+       }
+      ]
+     },
+     {
+      "seg": 0,
+      "slot": 1,
+      "borrowed_slot": false,
+      "start_ms": 1500,
+      "end_ms": 3000,
+      "ready_ms": 1500,
+      "delay_ms": 0,
+      "lane": "fast",
+      "price_lane": "fast",
+      "priority": 2,
+      "channel": "light",
+      "merged": false,
+      "price_known": true,
+      "gift_id": 1001,
+      "name": "小心心",
+      "diamond": 1,
+      "count": 1,
+      "user": "",
+      "uid": "",
+      "key": "light|1",
+      "source_event_indexes": [
+       1
+      ],
+      "segments": [
+       {
+        "t_ms": 1500,
+        "text": "小心心 ×1"
+       }
+      ]
+     },
+     {
+      "seg": 0,
+      "slot": 2,
+      "borrowed_slot": false,
+      "start_ms": 2000,
+      "end_ms": 3500,
+      "ready_ms": 2000,
+      "delay_ms": 0,
+      "lane": "fast",
+      "price_lane": "fast",
+      "priority": 2,
+      "channel": "light",
+      "merged": false,
+      "price_known": true,
+      "gift_id": 1001,
+      "name": "小心心",
+      "diamond": 1,
+      "count": 1,
+      "user": "",
+      "uid": "",
+      "key": "light|2",
+      "source_event_indexes": [
+       2
+      ],
+      "segments": [
+       {
+        "t_ms": 2000,
+        "text": "小心心 ×1"
+       }
+      ]
+     },
+     {
+      "seg": 0,
+      "slot": 3,
+      "borrowed_slot": false,
+      "start_ms": 2200,
+      "end_ms": 3700,
+      "ready_ms": 2200,
+      "delay_ms": 0,
+      "lane": "fast",
+      "price_lane": "fast",
+      "priority": 2,
+      "channel": "light",
+      "merged": false,
+      "price_known": true,
+      "gift_id": 1002,
+      "name": "闪烁星河",
+      "diamond": 98,
+      "count": 1,
+      "user": "",
+      "uid": "",
+      "key": "light|3",
+      "source_event_indexes": [
+       3
+      ],
+      "segments": [
+       {
+        "t_ms": 2200,
+        "text": "闪烁星河 ×1"
+       }
+      ]
+     },
+     {
+      "seg": 0,
+      "slot": 4,
+      "borrowed_slot": true,
+      "start_ms": 2400,
+      "end_ms": 7400,
+      "ready_ms": 2400,
+      "delay_ms": 0,
+      "lane": "slow",
+      "price_lane": "slow",
+      "priority": 1,
+      "channel": "light",
+      "merged": false,
+      "price_known": true,
+      "gift_id": 1003,
+      "name": "亲吻",
+      "diamond": 99,
+      "count": 1,
+      "user": "",
+      "uid": "",
+      "key": "light|4",
+      "source_event_indexes": [
+       4
+      ],
+      "segments": [
+       {
+        "t_ms": 2400,
+        "text": "亲吻 ×1"
+       }
+      ]
+     },
+     {
+      "seg": 0,
+      "slot": 5,
+      "borrowed_slot": false,
+      "start_ms": 2600,
+      "end_ms": 4100,
+      "ready_ms": 2600,
+      "delay_ms": 0,
+      "lane": "fast",
+      "price_lane": "fast",
+      "priority": 2,
+      "channel": "light",
+      "merged": false,
+      "price_known": true,
+      "gift_id": 1005,
+      "name": "免费祝福",
+      "diamond": 0,
+      "count": 1,
+      "user": "",
+      "uid": "",
+      "key": "light|5",
+      "source_event_indexes": [
+       5
+      ],
+      "segments": [
+       {
+        "t_ms": 2600,
+        "text": "免费祝福 ×1"
+       }
+      ]
+     },
+     {
+      "seg": 0,
+      "slot": 6,
+      "borrowed_slot": false,
+      "start_ms": 3000,
+      "end_ms": 6000,
+      "ready_ms": 3000,
+      "delay_ms": 0,
+      "lane": "fast",
+      "price_lane": "fast",
+      "priority": 2,
+      "channel": "full",
+      "merged": true,
+      "price_known": true,
+      "gift_id": 1001,
+      "name": "小心心",
+      "diamond": 1,
+      "count": 9,
+      "user": "观众甲",
+      "uid": "u1",
+      "key": "full|u1|1001",
+      "source_event_indexes": [
+       6,
+       7,
+       8
+      ],
+      "segments": [
+       {
+        "t_ms": 3000,
+        "text": "观众甲 送出 小心心 ×1（1 抖币）"
+       },
+       {
+        "t_ms": 4000,
+        "text": "观众甲 送出 小心心 ×5（5 抖币）"
+       },
+       {
+        "t_ms": 5000,
+        "text": "观众甲 送出 小心心 ×9（9 抖币）"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "idx": 1,
+    "start_ms": 8000,
+    "end_ms": 60000,
+    "items": [
+     {
+      "seg": 1,
+      "slot": 0,
+      "borrowed_slot": false,
+      "start_ms": 9000,
+      "end_ms": 14000,
+      "ready_ms": 9000,
+      "delay_ms": 0,
+      "lane": "slow",
+      "price_lane": "fast",
+      "priority": 1,
+      "channel": "full",
+      "merged": false,
+      "price_known": true,
+      "gift_id": 1001,
+      "name": "小心心",
+      "diamond": 1,
+      "count": 12,
+      "user": "观众甲",
+      "uid": "u1",
+      "key": "full|u1|1001",
+      "source_event_indexes": [
+       9
+      ],
+      "segments": [
+       {
+        "t_ms": 9000,
+        "text": "观众甲 送出 小心心 ×12（12 抖币）"
+       }
+      ]
+     },
+     {
+      "seg": 1,
+      "slot": 1,
+      "borrowed_slot": false,
+      "start_ms": 9500,
+      "end_ms": 14500,
+      "ready_ms": 9500,
+      "delay_ms": 0,
+      "lane": "slow",
+      "price_lane": "slow",
+      "priority": 0,
+      "channel": "full",
+      "merged": false,
+      "price_known": true,
+      "gift_id": 1004,
+      "name": "嘉年华",
+      "diamond": 30000,
+      "count": 1,
+      "user": "观众乙",
+      "uid": "u2",
+      "key": "full|u2|1004",
+      "source_event_indexes": [
+       10
+      ],
+      "segments": [
+       {
+        "t_ms": 9500,
+        "text": "观众乙 送出 嘉年华 ×1（30000 抖币）"
+       }
+      ]
+     },
+     {
+      "seg": 1,
+      "slot": 2,
+      "borrowed_slot": false,
+      "start_ms": 10000,
+      "end_ms": 15000,
+      "ready_ms": 10000,
+      "delay_ms": 0,
+      "lane": "slow",
+      "price_lane": "slow",
+      "priority": 1,
+      "channel": "light",
+      "merged": false,
+      "price_known": false,
+      "gift_id": 9999,
+      "name": "礼物#9999",
+      "diamond": 0,
+      "count": 1,
+      "user": "",
+      "uid": "",
+      "key": "light|11",
+      "source_event_indexes": [
+       11
+      ],
+      "segments": [
+       {
+        "t_ms": 10000,
+        "text": "礼物#9999 ×1"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "tail_overflow": [],
+  "stats": {
+   "source_events": 12,
+   "visible_events": 12,
+   "merged_events": 2,
+   "overflow_events": 0,
+   "items": 10,
+   "borrowed_items": 1,
+   "delay_ms": {
+    "slow": {
+     "n": 4,
+     "p50": 0,
+     "p95": 0,
+     "max": 0
+    },
+    "fast": {
+     "n": 6,
+     "p50": 0,
+     "p95": 0,
+     "max": 0
+    },
+    "p0": {
+     "n": 1,
+     "max": 0
+    }
+   },
+   "covered": true
+  }
+ }
+}

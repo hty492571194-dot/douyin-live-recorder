@@ -21,3 +21,8 @@ playwright>=1.55
 
 # ffmpeg 兜底:系统没装 ffmpeg 时用它自带的二进制(preflight 自检会提示)
 imageio-ffmpeg>=0.5
+
+# 系统 CPU 采样(2026-10-22 画质调度):自动降级要靠「系统整体 CPU 利用率」判定,
+# 不用 load average —— 编码线程多,load 会被拉得很高而 CPU 其实还有余量,用 load
+# 会疯狂误降档。没装时退回 `ps -A -o pcpu` 求和(精度差但方向对)。
+psutil>=5.9

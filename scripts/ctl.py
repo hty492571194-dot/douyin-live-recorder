@@ -9,8 +9,8 @@ Web 界面上的「重启」是**延迟 + 脱离进程组**执行的:后端必�
 最后直接把结果打出来。
 
 和 Web 按钮的关系:两者共用 `webui._service_plan()` 里的同一份执行计划
-(先清端口上的外来实例、bootstrap 前先 bootout 这些次序规则只写一遍),
-本文件只负责「怎么执行、怎么等待、怎么展示」。
+(先清端口上的外来实例、已装载就直接拉起、未装载才 bootstrap 这些次序规则
+只写一遍),本文件只负责「怎么执行、怎么等待、怎么展示」。
 
 用法(装好后在任意目录都能用,见 README「终端快捷指令」一节;
 完整清单直接敲 `douyin help`,同样由下面的 COMMANDS 表渲染)
@@ -52,6 +52,24 @@ STATUS_CN = {"ok": "正常", "warn": "降级", "down": "故障", "idle": "空闲
 
 SUCCESS, FAILURE, TIMEOUT = 0, 1, 2
 
+# launchd 类步骤到底要给多久
+# --------------------------
+# 一条 launchctl 命令远不是「毫秒级」:bootout / kickstart 会同步等到进程真的
+# 退出、或新实例真的 spawn 完成。而 plist 里两个参数决定了这段时间的上限:
+#   ExitTimeOut=30        SIGTERM 后留给进程收尾的秒数(停 ffmpeg、落历史)
+#   ThrottleInterval=60   同一 job 退出后 60 秒内再要求启动 = 崩溃循环,排队等窗口
+# 最坏 30 + 60 = 90 秒。2026-10-29 的实际故障就是这里的默认超时(20 秒)撞上
+# 60 秒节流窗口:ctl.py 报「命令超时」判失败,而 launchd 那边一切正常,服务
+# 60 秒后照常起来 —— 一次成功的启动被说成了失败。
+LAUNCHD_TIMEOUT = 100
+
+# 动作发完后等「服务真的能应答」的窗口。同样要盖住 60 秒节流 + 启动初始化,
+# 否则会在成功前一刻报「没有等到服务响应」(2026-10-29 差 22 秒踩到过)。
+READY_TIMEOUT = 120
+
+# 这几类步骤会打断正在进行的录制 —— 动手前必须先说清楚
+INTERRUPTING_KINDS = ("term", "kill", "bootout")
+
 # ── 命令清单(唯一真源) ────────────────────────────────────
 # 「有哪些命令、各自什么效果」只写在这一处:argparse 的子命令与帮助文本、
 # `douyin help` 的速查表、以及「一键启动.command」窗口里显示的那张表,
@@ -65,7 +83,7 @@ SUCCESS, FAILURE, TIMEOUT = 0, 1, 2
 COMMANDS = (
     ("status", ("st", "s"), "服务状态 + 健康摘要 + 直播/录制(不带参数时的默认动作)",
      "douyin"),
-    ("start", ("on", "up"), "启动服务并交给 launchd(开机自启、崩溃自动拉起)",
+    ("start", ("on", "up"), "启动服务并交给 launchd(在跑时是空操作,不打断录制)",
      "douyin start"),
     ("stop", ("off", "down"), "关闭服务(不会自己回来,需再 start)",
      "douyin stop"),
@@ -79,6 +97,12 @@ COMMANDS = (
      "douyin open"),
     ("doctor", (), "自检终端环境(PYTHONPATH / 残留代理隐患)",
      "douyin doctor"),
+    ("diagnose", (), "跨项目诊断包:把场次排查证据打包投递到 NAS _对接/诊断包/",
+     'douyin diagnose "<主播>/<日期>[/<场次stem>]"'),
+    ("notice", (), "产物变更通告(S5):写 NOTICE.md 并投递契约三件套到 NAS _对接/contract/,告知后端及时同步",
+     'douyin notice "<变更摘要>" --type 产物 --detail "影响范围"'),
+    ("checkav", ("avsync",), "音画同步自检:数音频采样数与视轨跨度,超阈值即报(容器时长看不出这个问题)",
+     'douyin checkav "recordings/<主播>/<日期>"'),
     ("help", (), "打印本页命令速查(--short 紧凑版,--json 结构化输出)",
      "douyin help"),
 )
@@ -166,6 +190,36 @@ def _probe_http():
     return _http("/api/service") is not None
 
 
+def _recording_count():
+    """当前正在录制的路数。0 表示这次操作不会打断任何场次。
+
+    判据与 Web 按钮的确认框、启动窗口的 confirm 完全一致:只数 /api/status
+    顶层 recordings 里 recording 为真的(PROJECT 里踩过「用 streamers[x].recording
+    判断」的坑,那个字段不可靠)。
+    """
+    st = _http("/api/status")
+    if not st:
+        return 0
+    recs = st.get("recordings") or {}
+    return sum(1 for v in recs.values()
+               if isinstance(v, dict) and v.get("recording") is True)
+
+
+def _plan_interrupts(steps):
+    """这份计划会不会打断正在跑的进程(连带走录制)。
+
+    start 在 2026-10-29 之后不再具备这个性质 —— 已装载时它只是 kickstart 一次,
+    对在跑的实例是空操作。所以这里必须按**真实命令**判断,不能按动作名一刀切,
+    否则「服务好好在跑时敲 start」也会被吓一跳。
+    """
+    for st in steps:
+        if st["kind"] in INTERRUPTING_KINDS:
+            return True
+        if st["kind"] == "kickstart" and " -k" in st["cmd"]:
+            return True
+    return False
+
+
 # ── status ────────────────────────────────────────────────
 def _print_service():
     st = webui._service_status()
@@ -200,8 +254,15 @@ def _print_service():
 def _print_health():
     h = _http("/api/health")
     if h is None:
-        print("健康   %s 服务未响应,拿不到健康面板(先 douyin start)"
-              % _dot("down"))
+        # 要区分「服务没起来」和「这个版本没有健康面板接口」:发布包/旧版本里
+        # 没有 /api/health,而服务明明在跑 —— 这时说「服务未响应」会把人引去
+        # 重启一个本来好好的服务。用 /api/service 再确认一次它是否在响应。
+        if _probe_http():
+            print("健康   %s 该版本没有健康面板接口(/api/health),跳过"
+                  % _dot("idle"))
+        else:
+            print("健康   %s 服务未响应,拿不到健康面板(先 douyin start)"
+                  % _dot("down"))
         return
     c = h.get("counts") or {}
     print("健康   %s 正常 %d · 降级 %d · 故障 %d · 空闲 %d"
@@ -257,6 +318,14 @@ def _run_action(action, dry_run=False):
                         "（干跑,不会真执行）" if dry_run else "", message))
     if not ok:
         return FAILURE
+    # 会中断录制的话,必须在动手**之前**说清楚 —— 尤其在录的时候人容易按错。
+    # 这里只警告不拦问:确认交互在「一键启动.command」的菜单层(那里按 y 才继续),
+    # 在 ctl.py 再问一次会变成同一条命令问两遍。
+    if ok and not dry_run and _plan_interrupts(steps):
+        n = _recording_count()
+        if n:
+            print("       %s 当前 %d 路正在录制 —— 本次操作会中断它们"
+                  "(已录部分会落进历史)" % (_dot("warn"), n))
     if dry_run:
         # 会中断录制,所以先让人看清要做什么再点头
         print("  将要执行:")
@@ -276,8 +345,17 @@ def _run_action(action, dry_run=False):
             continue                  # 已经自己退了,不必补刀
 
         print("       → %s" % label)
-        rc, out = _sh(st["cmd"])
-        if rc not in (0, 1) and out:  # 1 常是 kill 说「进程已不在」,不算失败
+        # launchd 那几步要按 90 秒的最坏耗时给,不能套用普通命令的 20 秒
+        launchd_step = kind in ("bootout", "bootstrap", "kickstart")
+        rc, out = _sh(st["cmd"], timeout=LAUNCHD_TIMEOUT if launchd_step else 20)
+        if rc == 124 and launchd_step:
+            # 超时 ≠ 失败。launchctl 已经通过 XPC 把请求交给 launchd 了,它可能
+            # 正卡在 ThrottleInterval 节流窗口里排队;把它当失败会让人「再点一次」,
+            # 而那一次才真的会打断录制。所以只提醒,结论交给下面的 _verify。
+            print("         %s launchctl 未在 %d 秒内返回 —— 请求已提交,"
+                  "launchd 可能在节流窗口(ThrottleInterval)里排队,继续等它就绪"
+                  % (_dot("warn"), LAUNCHD_TIMEOUT))
+        elif rc not in (0, 1) and out:  # 1 常是 kill 说「进程已不在」,不算失败
             print("         %s %s" % (_dot("warn"), out.splitlines()[0][:200]))
 
         if kind == "term" and pid:
@@ -299,22 +377,24 @@ def _verify(action):
     if action == "stop":
         def gone():
             return webui._port_owner_pid(port) is None
-        if _wait(gone, 20):
+        # bootout 本身会等到进程退出(plist ExitTimeOut=30 是它的上限),
+        # 走到这里通常已经停了;这里只是再确认一次端口真的让出来了。
+        if _wait(gone, 40):
             print("%s  服务已停止(端口 %d 已释放)" % (_dot("ok"), port))
             return SUCCESS
         pid = webui._port_owner_pid(port)
-        print("%s  20 秒后端口仍被 pid %s 占用 —— 该实例不是 launchd 拉的,"
+        print("%s  40 秒后端口仍被 pid %s 占用 —— 该实例不是 launchd 拉的,"
               "需要 douyin restart 清掉" % (_dot("warn"), pid))
         return TIMEOUT
 
-    ready = _wait(_probe_http, 60, step=1.0)
+    ready = _wait(_probe_http, READY_TIMEOUT, step=1.0)
     st = webui._service_status()
     if ready:
         src = "launchd 托管" if st.get("source") == "launchd" else "非托管(建议 restart 交回)"
         print("%s  服务已就绪 · pid %s · %s · http://127.0.0.1:%d"
               % (_dot("ok"), st.get("pid"), src, port))
         return SUCCESS
-    print("%s  60 秒内没有等到服务响应。排查顺序:" % _dot("down"))
+    print("%s  %d 秒内没有等到服务响应。排查顺序:" % (_dot("down"), READY_TIMEOUT))
     print("       1) tail -30 %s/logs/launchd.err.log" % BASE)
     print("       2) douyin log 50")
     print("       3) 端口被非托管实例占用时,launchctl 会 Address already in use")
@@ -498,7 +578,7 @@ def cmd_help(args):
 
     if short:
         print("  小贴士:restart / stop 会中断正在录制的场次,先加 -n 可干跑看清步骤;"
-              "短别名在新开的终端窗口生效。")
+              "start 在服务已跑时是空操作。")
         return SUCCESS
 
     print("")
@@ -518,7 +598,65 @@ def cmd_help(args):
     return SUCCESS
 
 
+# ── 诊断包(S3.A) ──────────────────────────────────────────
+def cmd_diagnose(args):
+    """跨项目诊断包:定位场次 → 组包(zip+manifest.sha256) → 原子投递。
+
+    纯 CLI(不依赖服务在线);坐标 <主播>/<日期>[/<场次stem>],对端的 stem
+    是它自己切的时刻,按 HHMMSS 尾匹配即可,对不上按日期目录全量出。
+    """
+    import interop
+    key = " ".join(args.key).strip()
+    if not key:
+        print('用法: douyin diagnose "<主播>/<日期>[/<场次stem>]"')
+        return FAILURE
+    rc, report = interop.run_diagnose(key, cfg=interop.load_cfg(),
+                                      force=args.force)
+    print(report)
+    return rc
+
+
+# ── 产物变更通告(S5) ──────────────────────────────────────
+def cmd_notice(args):
+    """产物变更通告:写 NOTICE.md → 投递契约三件套到 _对接/contract/。
+
+    义务来源:contract.json producer_duties(契约 v1.1.0 起)。凡改产物
+    (files/naming/timestamps/capabilities/diagnostics 任一声明),调整的
+    同时必须跑一次,让转录端及时同步。
+    """
+    from notify_backend import run_notice
+    import interop
+    summary = " ".join(args.summary).strip()
+    if not summary:
+        print('用法: douyin notice "<变更摘要>" --type 产物 --detail "补充说明"')
+        return FAILURE
+    rc, report = run_notice(summary, kind=args.kind,
+                            detail=" ".join(args.detail).strip(),
+                            cfg=interop.load_cfg())
+    print(report)
+    return rc
+
+
 # ── 入口 ──────────────────────────────────────────────────
+def cmd_checkav(args):
+    """音画同步自检:委托 scripts/check_av_sync.py(纯标准库,可单独跑)。
+
+    为什么值得单独一条命令:容器时长走 PTS、采样数走内容,两个可以对不上。
+    旧时间基写出来的文件"看起来 38 分钟、真解码少 8 秒",播放器与 ffprobe
+    都报正常 —— 只有数采样才看得见,所以做成可随手复跑的一条。
+    """
+    import importlib.util
+    path = os.path.join(BASE, "scripts", "check_av_sync.py")
+    try:
+        spec = importlib.util.spec_from_file_location("check_av_sync", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except (OSError, ImportError) as exc:
+        print("自检脚本加载失败: %s" % exc)
+        return FAILURE
+    return mod.main(["--threshold", str(args.threshold)] + list(args.targets))
+
+
 def build_parser():
     """子命令从 COMMANDS 表生成 —— 帮助文本、别名、速查表同源,不会漂移。"""
     p = argparse.ArgumentParser(
@@ -531,7 +669,8 @@ def build_parser():
 
     fns = {"status": cmd_status, "start": cmd_start, "stop": cmd_stop,
            "restart": cmd_restart, "health": cmd_health, "log": cmd_log,
-           "open": cmd_open, "doctor": cmd_doctor, "help": cmd_help}
+           "open": cmd_open, "doctor": cmd_doctor, "diagnose": cmd_diagnose,
+           "notice": cmd_notice, "checkav": cmd_checkav, "help": cmd_help}
     # 这几条会中断在录的场次,统一给一个「只看不做」的开关
     dry_run_able = {"start", "stop", "restart"}
 
@@ -545,6 +684,24 @@ def build_parser():
             s.add_argument("lines", nargs="?", type=int, default=30,
                            help="输出行数(默认 30)")
             s.add_argument("-f", "--follow", action="store_true", help="持续跟随")
+        if name == "diagnose":
+            s.add_argument("key", nargs="+",
+                           help='场次坐标 "<主播>/<日期>[/<场次stem>]"'
+                                '(主播名含空格时可整体加引号,或按空格分段给)')
+            s.add_argument("--force", action="store_true",
+                           help="同名诊断包已存在时强制重投")
+        if name == "notice":
+            s.add_argument("summary", nargs="+",
+                           help="变更一句话摘要(将作为通告标题)")
+            s.add_argument("--type", dest="kind", default="产物",
+                           help="变更类型: 产物|通道|停机|其他(默认 产物)")
+            s.add_argument("--detail", nargs="*", default=(),
+                           help="补充说明: 影响范围/迁移建议/生效版本等")
+        if name == "checkav":
+            s.add_argument("targets", nargs="+",
+                           help="FLV 文件 / 目录 / 场次目录(可多个)")
+            s.add_argument("--threshold", type=float, default=0.5,
+                           help="判定阈值(秒),默认 0.5")
         if name == "help":
             # 一键启动窗口一屏要放得下,给它个紧凑版
             s.add_argument("-s", "--short", action="store_true",

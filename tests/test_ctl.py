@@ -13,8 +13,10 @@ import importlib.util
 import io
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -42,14 +44,21 @@ def _run_cli(argv):
 
 
 class _NoSideEffectMixin:
-    """默认让计划里不出现外来进程、plist 视为存在,用例再按需覆盖。"""
+    """默认让计划里不出现外来进程、job 视为未装载,用例再按需覆盖。"""
 
     def setUp(self):
         self.orig_outsider = webui._outsider_pid
         self.orig_plist = webui.LAUNCHD_PLIST
+        self.orig_status = webui._service_status
         webui._outsider_pid = lambda: None
+        # start 现在要看 launchd 装载状态才决定 kickstart 还是 bootstrap。
+        # 不打桩就会读本机真实状态 —— 测试结果会随「这台机器上服务在不在跑」漂移,
+        # 而这类测试恰恰必须在录制中的机器上也能跑绿。
+        webui._service_status = lambda: {"managed": False, "running": False,
+                                         "source": None, "pid": None}
         self.addCleanup(setattr, webui, "_outsider_pid", self.orig_outsider)
         self.addCleanup(setattr, webui, "LAUNCHD_PLIST", self.orig_plist)
+        self.addCleanup(setattr, webui, "_service_status", self.orig_status)
 
 
 class TestServicePlan(_NoSideEffectMixin, unittest.TestCase):
@@ -103,14 +112,59 @@ class TestServicePlan(_NoSideEffectMixin, unittest.TestCase):
         self.assertEqual([s["kind"] for s in steps], ["bootout"])
         self.assertIn("bootout", steps[0]["cmd"])
 
-    def test_start_unloads_before_bootstrap(self):
-        """已装载时裸 bootstrap 会报 already loaded,必须先 bootout。"""
-        _, _, steps = webui._service_plan("start")
-        kinds = [s["kind"] for s in steps]
-        self.assertEqual(kinds[0], "bootout")
-        self.assertIn("bootstrap", kinds)
-        self.assertLess(kinds.index("bootout"), kinds.index("bootstrap"))
-        self.assertEqual(kinds[-1], "kickstart")
+    def test_start_never_unloads_the_job(self):
+        """start 绝不能 bootout —— 那会 SIGTERM 掉正在录制的进程。
+
+        来历(2026-10-29 实测):start 曾无条件 bootout → bootstrap,理由是
+        「job 已装载时裸 bootstrap 会报 already loaded」。这条理由只在「已装载
+        但进程没跑」时成立,却被套到了所有状态上:bootout 会给正在跑的进程发
+        SIGTERM,一条 douyin start 于是中断了 2 路录制;而它记下的退出时刻还会
+        打开 launchd 的 ThrottleInterval(60 秒)节流窗口,新实例要等满一分钟才
+        spawn —— 用户看到的正是「重启失败」。
+        """
+        for managed in (False, True):
+            webui._service_status = lambda m=managed: {
+                "managed": m, "running": m,
+                "source": "launchd" if m else None, "pid": 4242 if m else None}
+            _, _, steps = webui._service_plan("start")
+            joined = " ".join(s["cmd"] for s in steps)
+            self.assertNotIn("bootout", joined,
+                             "start 又开始卸载 job 了 —— 在录的服务会被一起掐掉")
+            self.assertNotIn("kickstart -k", joined,
+                             "start 不该带 -k:它只保证服务在跑,不该杀在跑的实例")
+
+    def test_start_when_loaded_just_kickstarts(self):
+        """job 已装载就只 kickstart(不带 -k),不再重装一遍。
+
+        「已装载但进程没跑」时裸 bootstrap 确实报 already loaded —— 正确解法是
+        kickstart 把 job 拉起来,而不是先卸载再装载。
+        """
+        webui._service_status = lambda: {"managed": True, "running": False,
+                                         "source": "launchd", "pid": None}
+        ok, _, steps = webui._service_plan("start")
+        self.assertTrue(ok)
+        self.assertEqual([s["kind"] for s in steps], ["kickstart"])
+        self.assertIn(webui.LAUNCHD_LABEL, steps[0]["cmd"])
+
+    def test_start_bootstraps_only_when_not_loaded(self):
+        """未装载才需要 bootstrap;装载完再 kickstart 一次确保真的起来。"""
+        ok, _, steps = webui._service_plan("start")
+        self.assertTrue(ok)
+        self.assertEqual([s["kind"] for s in steps], ["bootstrap", "kickstart"])
+
+    def test_start_refuses_when_outsider_holds_port(self):
+        """端口被非托管实例占着时,start 不猜也不动手。
+
+        照旧 bootstrap 的话,新实例一 bind 就 Address already in use、退出,
+        KeepAlive 再拉 —— 每 60 秒崩一次(2026-09-11 那次 err.log 涨到 7.5MB
+        就是这个循环)。清场带收尾流程,那是 restart 的职责。
+        """
+        webui._outsider_pid = lambda: 24190
+        ok, msg, steps = webui._service_plan("start")
+        self.assertFalse(ok)
+        self.assertIn("24190", msg)
+        self.assertIn("重启", msg, "拒绝时必须指出该走哪条命令")
+        self.assertEqual(steps, [], "拒绝时不能留下任何可执行的命令")
 
     def test_missing_plist_blocks_start_and_restart(self):
         webui.LAUNCHD_PLIST = "/definitely/not/here.plist"
@@ -138,8 +192,13 @@ class TestControlSharesPlan(unittest.TestCase):
         subprocess.Popen = self._fake_popen
         self.addCleanup(setattr, subprocess, "Popen", self.orig_popen)
         self.orig_outsider = webui._outsider_pid
+        self.orig_status = webui._service_status
         webui._outsider_pid = lambda: None
+        # 与 _NoSideEffectMixin 同理:start 的计划取决于本机装载状态,必须打桩
+        webui._service_status = lambda: {"managed": False, "running": False,
+                                         "source": None, "pid": None}
         self.addCleanup(setattr, webui, "_outsider_pid", self.orig_outsider)
+        self.addCleanup(setattr, webui, "_service_status", self.orig_status)
 
     def _fake_popen(self, args, **kw):
         self.calls.append((args, kw))
@@ -253,7 +312,9 @@ class TestCheatsheet(unittest.TestCase):
     的子命令全部从 COMMANDS / ZSH_ALIASES 渲染。这里守三件事:
       ① 速查表里列出来的必须真的能敲(反向也成立);
       ② 表里写的短别名与 install_cli.sh 写进 ~/.zshrc 的那份逐字一致;
-      ③ 启动脚本只负责显示,不许自己抄一份命令表 —— 抄一份就会过期一份。
+      ③ 启动脚本只负责显示,不许自己抄一份命令表 —— 抄一份就会过期一份;
+      ④ 启动窗口的快捷操作(打开控制台/状态/重启/关闭)必须还在,且按键转发到的
+         命令必须真实存在 —— 否则就是个按键下去毫无反应的哑键。
     """
 
     def setUp(self):
@@ -312,16 +373,180 @@ class TestCheatsheet(unittest.TestCase):
 
     def test_launcher_renders_from_same_source(self):
         """启动窗口里的表必须来自 scripts/ctl.py,不能另抄一份。"""
-        with open(os.path.join(BASE, "一键启动.command"), encoding="utf-8") as f:
-            text = f.read()
+        text = self._launcher_text()
         self.assertIn("scripts/ctl.py", text, "启动脚本没引用共享的命令表")
         self.assertIn("help --short", text, "启动脚本没渲染速查表")
+
+    def _launcher_text(self):
+        with open(os.path.join(BASE, "一键启动.command"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_launcher_variables_before_cjk_are_braced(self):
+        """变量后面紧跟中文必须写 `${var}`。
+
+        实测过的坑:bash 3.2(macOS 自带)不是多字节感知的,`$what会中断` 会被
+        解析成变量 `what会中断` —— `set -u` 下直接 unbound variable 崩掉,
+        而且要等到「正在录制时按 q」那条分支才暴露(平时测不到)。
+        """
+        # 注释里出现的示例不算(注释不会被 bash 解析)
+        body = "\n".join(ln for ln in self._launcher_text().splitlines()
+                         if not ln.lstrip().startswith("#"))
+        bad = re.findall(r"\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]", body)
+        self.assertEqual(bad, [], "变量后紧跟中文会被当成变量名的一部分:%s" % bad)
+
+    def test_launcher_console_quick_actions(self):
+        """窗口里的四个快捷操作不许被删:改文案可以,改到按键消失不行。
+
+        「o 打开控制台」是 2026-10-29 加的 —— 之前想开浏览器只能记 http 地址。
+        """
+        text = self._launcher_text()
+        for line in ("o  打开 Web 控制台", "s  检测运行状态",
+                     "r  重启 / 启动", "q  关闭服务"):
+            self.assertIn(line, text, f"启动窗口少了快捷操作「{line}」")
+
+    def test_launcher_console_forwards_to_real_commands(self):
+        """按键动作必须转发到 ctl.py 里真实存在的命令,不能凭空写一个。
+
+        这里收**全部** `ctl <子命令>` 转发、再和 COMMANDS 对账,而不是写白名单 ——
+        白名单会漏掉打错的那个词(把 open 打成 openweb,白名单根本匹配不上,
+        测试照样是绿的,只有按键下去才发现没反应)。
+        """
+        used = set(re.findall(r"\bctl ([a-z][a-z_-]*)", self._launcher_text()))
+        self.assertTrue(used, "启动脚本没有转发任何 ctl 命令(菜单就成了摆设)")
+        names = {c[0] for c in ctl.COMMANDS}
+        self.assertEqual(used - names, set(),
+                         "启动脚本调用了 ctl.py 里不存在的命令,按键会没反应")
 
     def test_launcher_syntax_ok(self):
         rc = subprocess.run(["/bin/bash", "-n",
                              os.path.join(BASE, "一键启动.command")],
                             capture_output=True, text=True)
         self.assertEqual(rc.returncode, 0, rc.stderr)
+
+
+class TestLauncherDirGuard(unittest.TestCase):
+    """启动器必须认得出「这个目录里的代码不是同一代」。
+
+    来历(2026-10-29 事故):~/Downloads 下并存历史发布快照目录。凌晨把新版
+    「一键启动.command」拷进 8 月那份快照里双击 —— 那里的 monitor.py、
+    static/index.html 还停在三个月前那一代,于是端口上跑起一个「入口新、
+    页面旧」的杂交实例,整站界面回退;launchd 的正式服务每 60 秒撞一次端口
+    退出,而外层探活只看 HTTP 200 就报了"响应正常",所以谁都没察觉。
+
+    这里守三件事:
+      ① 目录自检发生在**任何进程被拉起之前**(自检晚了就白检);
+      ② 探活成功 ≠ 服务是本目录的 —— 必须比对实例身份;
+      ③ 锚点表要与真实仓库对得上(写错锚点会让每次启动都被拒)。
+    """
+
+    def _text(self):
+        with open(os.path.join(BASE, "一键启动.command"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_verify_runs_before_any_spawn(self):
+        text = self._text()
+        self.assertIn("if ! verify_project; then", text,
+                      "启动脚本没有目录自检")
+        # 顶格的 start_child 才是「真的去拉进程」那一行(定义写作 start_child() {)
+        spawn = text.index("\nstart_child\n")
+        self.assertLess(text.index("if ! verify_project; then"), spawn,
+                        "目录自检排在拉起进程之后 —— 那时端口已经被抢了")
+
+    def test_generation_anchors_exist_in_repo(self):
+        """锚点与真实仓库对账:写错会变成「每次启动都被拒」。
+
+        不写死符号名,而是从脚本里的锚点表解析 —— 换实现时改脚本即同步,
+        但改漏了(脚本里写着、仓库里没有)会在这里立刻报红。
+        """
+        text = self._text()
+        begin = text.index("check_same_generation() {")
+        end = text.index("verify_project() {")
+        anchors = re.findall(r'"([\w./]+)\|([^"]+)"', text[begin:end])
+        self.assertTrue(anchors, "脚本里解析不到同代锚点,是不是换了写法?")
+        for rel, pat in anchors:
+            path = os.path.join(BASE, rel)
+            self.assertTrue(os.path.isfile(path), "锚点指向的文件不存在: %s" % rel)
+            with open(path, encoding="utf-8", errors="replace") as f:
+                self.assertIn(pat, f.read(),
+                              "%s 里找不到锚点 %s —— 换实现可以,锚点表要同步改"
+                              % (rel, pat))
+
+    def test_instance_identity_not_just_http_200(self):
+        """探活通过只证明端口上有人讲 HTTP,不能当成「跑的是本目录」。"""
+        text = self._text()
+        self.assertIn("instance_root", text, "启动脚本没有比对实例身份")
+        self.assertIn("project_root", text, "没有走后端自报的 project_root")
+        # 后端还没升到带 project_root 的版本时靠 cwd 兜底,否则退化成"身份不明"
+        # —— 而"身份不明"正是这次事故里最危险的状态。
+        self.assertIn("-d cwd", text, "缺少 lsof cwd 兜底")
+        main = text[text.index("# ══ 主流程"):]
+        self.assertIn("instance_root", main, "主流程没用上身份比对")
+
+    def test_open_browser_only_after_identity_check(self):
+        """起服务后「等就绪再开浏览器」也必须验身份,不能只看 HTTP 通不通。
+
+        2026-10-29 事故的完整链条里,这是最后一环:本目录的 monitor 因为端口被
+        历史副本占着而启动即退出,而轮询只要 probe 成功就 open —— 屏幕上出现
+        的是别人那份的页面(界面回退三个月),窗口里却写着「已启动」。
+        """
+        text = self._text()
+        begin = text.index("open_browser_when_ready() {")
+        end = text.index("cleanup_poller() {")
+        body = text[begin:end]
+        self.assertIn("instance_root", body, "开浏览器前没有校验实例身份")
+        self.assertIn('"$r" = "$ROOT"', body, "身份相等才该开浏览器")
+
+    def test_child_launch_uses_absolute_path(self):
+        """子进程 cmdline 要带 monitor.py 的绝对路径。
+
+        否则 `pkill -9 -f "$ROOT/monitor.py"` 这条兜底清理认不出自己拉起的进程
+        (相对路径的 cmdline 里没有这个绝对路径),僵死时清不掉、只能手工 kill。
+        """
+        text = self._text()
+        self.assertIn('"$PY" -u "$ROOT/monitor.py"', text,
+                      "启动子进程仍用相对路径,pkill 兜底会失效")
+        self.assertNotIn('"$PY" -u monitor.py', text)
+
+    def test_side_dir_hands_over_to_official(self):
+        """在非正式目录双击时,要能把人直接转交给正式目录那一份。
+
+        这就是「让它启动最新版本」的实际动作:不做静默跨目录启动(那会让人以为
+        在 A 目录跑),而是问一句后 exec 转交,规则仍只有这一处。
+        """
+        text = self._text()
+        self.assertIn('exec /bin/bash "$official/一键启动.command"', text,
+                      "非正式目录没有转交正式目录的路径")
+
+
+        with open(os.path.join(BASE, "webui.py"), encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn('st["project_root"] = BASE', src,
+                      "/api/status 没自报 project_root,启动器只能靠 cwd 猜")
+
+    def test_legacy_snapshot_dir_is_refused(self):
+        """真跑一次:文件齐但停在旧代的目录必须被拒,且不得拉起任何进程。
+
+        判据是「输出里说明原因」而不是只看退出码 —— 自检失效时脚本会继续往下
+        走,在临时目录里因为找不到 setup.sh 同样非零退出,只测退出码是测不出的。
+        """
+        tmp = tempfile.mkdtemp(prefix="dy-launcher-guard-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        for rel in ("monitor.py", "webui.py", "static/index.html",
+                    "scripts/ctl.py"):
+            p = os.path.join(tmp, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("# 历史快照占位:不含本代符号\n")
+        shutil.copy2(os.path.join(BASE, "一键启动.command"),
+                     os.path.join(tmp, "一键启动.command"))
+        rc = subprocess.run(
+            ["/bin/bash", os.path.join(tmp, "一键启动.command")],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL,
+            env=dict(os.environ, DOUYIN_ALLOW_SIDE_COPY="1"), timeout=60)
+        out = rc.stdout + rc.stderr
+        self.assertNotEqual(rc.returncode, 0,
+                            "旧代目录被放行了 —— 会跑起「入口新、页面旧」的实例")
+        self.assertIn("不是同一代", out, "拒绝原因没讲清楚:\n%s" % out)
 
 
 class TestHelpers(unittest.TestCase):

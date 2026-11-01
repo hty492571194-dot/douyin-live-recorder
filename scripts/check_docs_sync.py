@@ -155,6 +155,86 @@ def check_all():
                 continue
             issues.append("项目框架说明书.md: 写了不存在的接口 %s" % endpoint)
 
+    # ⑧ 说明书里 `符号(L###)` 的行号必须指向该符号的真实定义行
+    #
+    # 行号是最容易腐烂的引用:改一处代码,后面所有行号全错,而旧行号看起来
+    # 依然"很具体",比不写更误导 —— 2026-09-19 实测 7 处引用**全部**过期
+    # (monitor.py 从 1618 行长到 1821 行,偏移上百行)。
+    if guide:
+        issues.extend(_check_symbol_line_refs(guide))
+
+    # ⑨ 目录树里 `xxx.py (N 行)` 的行数必须等于真实行数
+    if guide:
+        issues.extend(_check_module_line_counts(guide))
+
+    return issues
+
+
+# `symbol(L123)` / `module.func(L123)` —— 说明书用它做代码导航
+_LINE_REF = re.compile(r"`?([A-Za-z_][A-Za-z0-9_.]*)`?\s*\(\s*L(\d+)\s*\)")
+# 目录树里的 `xxx.py  (1234 行)`
+_MOD_LINES = re.compile(r"([A-Za-z_][A-Za-z0-9_]*\.py)\s*\((\d+)\s*行\)")
+
+
+def _py_lines(rel):
+    path = os.path.join(BASE, rel)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read().splitlines()
+    except OSError:
+        return None
+
+
+def _definitions(name):
+    """在顶层 .py（含 scripts/）里找符号定义行,返回 [(文件, 行号)]。"""
+    hits = []
+    defs = re.compile(r"\s*(?:async\s+)?(?:def|class)\s+%s\b" % re.escape(name))
+    assigns = re.compile(r"\s*%s\s*(?::[^=]+)?=" % re.escape(name))
+    for f in sorted(os.listdir(BASE)) + [os.path.join("scripts", x)
+                                         for x in sorted(os.listdir(os.path.join(BASE, "scripts")))
+                                         if x.endswith(".py")]:
+        if not f.endswith(".py"):
+            continue
+        lines = _py_lines(f)
+        if lines is None:
+            continue
+        for i, line in enumerate(lines, 1):
+            if defs.match(line) or assigns.match(line):
+                hits.append((f, i))
+    return hits
+
+
+def _check_symbol_line_refs(guide):
+    issues = []
+    for m in _LINE_REF.finditer(guide):
+        sym, ln = m.group(1), int(m.group(2))
+        name = sym.split(".")[-1]
+        hits = _definitions(name)
+        if not hits:
+            continue                    # 可能是外部库/概念名,不硬判
+        if ln in {i for _f, i in hits}:
+            continue                    # 命中某个定义行,视为正确
+        if len({i for _f, i in hits}) > 1:
+            continue                    # 同名多处定义,无法判定,不误伤
+        f0, real = hits[0]
+        issues.append("项目框架说明书.md: 写了 `%s(L%d)`,但它在 %s 第 %d 行"
+                      % (sym, ln, f0, real))
+    return issues
+
+
+def _check_module_line_counts(guide):
+    issues = []
+    for m in _MOD_LINES.finditer(guide):
+        name, declared = m.group(1), int(m.group(2))
+        lines = _py_lines(name) or _py_lines(os.path.join("scripts", name))
+        if lines is None:
+            continue
+        real = len(lines)
+        if real != declared:
+            issues.append("项目框架说明书.md: 写了 %s (%d 行),实际 %d 行"
+                          % (name, declared, real))
     return issues
 
 

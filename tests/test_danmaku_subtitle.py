@@ -94,10 +94,15 @@ class TestFlvParse(unittest.TestCase):
         self.assertIsNone(subtitle.flv_last_ts(self.path))
 
     def test_implausible_unwrap_rejected(self):
-        """tag 头合法但时间戳被解绕到 ±24.8 天边界 → 判为不可信(防 500+ 小时告警)。"""
+        """tag 头合法但时间戳解绕到荒谬区间 → 判为不可信(防 500+ 小时告警)。
+
+        2026-09-21 改按 31 位解(ffmpeg FLV muxer 实测截成 mod 2^31,见
+        subtitle._UNWRAP_MASK):解绕窗口从 ±24.8 天缩到 ±12.4 天。
+        垃圾值取「birth + 20 天」—— 它 wrap 后落在 −4.8 天,超出
+        TS_SANITY_LO(-24h) 仍须被拒。"""
         _make_flv(self.path, [(9, int(time.time() * 1000))])
         birth = subtitle._birthtime_ms(self.path)
-        bogus = birth - 22 * 86400_000  # 22 天前:正是解绕边界附近的垃圾值
+        bogus = birth + 20 * 86400_000  # +20 天:31 位 wrap 后 ≈ −4.8 天
         _make_flv(self.path, [(9, bogus)])
         self.assertIsNone(subtitle.flv_last_ts_abs(self.path))
 
@@ -187,7 +192,7 @@ class TestSegmentsAndAss(unittest.TestCase):
         # 礼物横幅与底部队列弹幕都有
         self.assertIn("嘉年华", c0)
         self.assertIn("\\an2", c0)        # 队列样式底部对齐
-        self.assertIn("\\t(0,150,", c0)   # 行间上移动画
+        self.assertIn("\\move(960,", c0)  # 行间上移动画(libass 不支持 \t 改 \pos)
 
         # 偏移重生成:分片 1 加 -2.5s,全局加 1s
         align = subtitle.load_align(self.pattern)
@@ -314,10 +319,12 @@ class TestAssStyles(unittest.TestCase):
                        (4000, "弹幕3"), (5000, "弹幕4"), (6000, "弹幕5")], "queue")
         for i in range(6):
             self.assertIn(f"弹幕{i}", c)
-        # 最新一条:从屏外底部(1074)滑入底行(1020)
-        self.assertIn(r"{\an2\pos(960,1074)\t(0,150,\pos(960,1020))}u: 弹幕5", c)
+        # 最新一条:从屏外底部(1074)滑入底行(1020)——用 \move 而非 \t(...\pos)
+        # (\t 改 \pos 在 libass 下不生效,文字会一直停在起始 y)
+        self.assertIn(r"{\an2\move(960,1074,960,1020,0,150)}u: 弹幕5", c)
+        self.assertNotIn("\\t(0,150,", c)
         # 第 1 条被顶出:最后一段从行 1(804)滑出顶部(6)
-        self.assertIn(r"\pos(960,804)\t(0,150,\pos(960,6))", c)
+        self.assertIn(r"\move(960,804,960,6,0,150)", c)
         # 每条弹幕段数 ≤ 6(最多 5 行 + 1 段滑出)
         for i in range(6):
             self.assertLessEqual(c.count(f"弹幕{i}"), 6)
@@ -346,3 +353,134 @@ class TestAssText(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUnwrap31Bit(unittest.TestCase):
+    """ffmpeg 的 FLV muxer 把墙钟截成 **31 位**(mod 2^31),不是 mod 2^32。
+
+    实测(2026-09-21):tag 值 899,855,307,而文件 mtime 的 epoch mod 2^32 =
+    3,047,340,114,差恰为 2^31。epoch mod 2^32 落在 [2^31, 2^32) 的窗口里
+    (2026-09-18 ~ 10-11 等),按 32 位解会偏 ±24.8 天 → 被拒 → 所有
+    *_ts_abs 静默返回 None。此测试锁死 31 位语义,防止将来被"改回标准"。
+    """
+
+    def test_31bit_epoch_window(self):
+        """构造 epoch32 > 2^31 的场景:32 位解会失败,31 位解必须成功。"""
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".flv", delete=False) as f:
+            path = f.name
+        try:
+            birth = 1_789_754_531_810                     # epoch32 = 3,048,136,674 > 2^31
+            wallclock = birth - 797_719                   # 末帧墙钟(≈ mtime)
+            raw31 = wallclock % 0x80000000                # ffmpeg 实际写入的值
+            self.assertNotEqual(raw31, wallclock % 2**32)  # 两种解释确实不同
+            with open(path, "r+b") as f:
+                pass
+            abs_ts = subtitle._unwrap_ts(raw31, birth)
+            self.assertAlmostEqual(abs_ts, wallclock, delta=1)
+            # 32 位解会得到 birth + 2^31 附近的值(远超 sanity 窗口)
+            delta32 = ((raw31 - (birth & 0xFFFFFFFF) + 0x80000000) & 0xFFFFFFFF) - 0x80000000
+            self.assertGreater(abs(abs(delta32)), subtitle.TS_SANITY_HI)
+        finally:
+            os.remove(path)
+
+
+class TestClockOffset(unittest.TestCase):
+    """源时间戳模式(recorder.src_timestamps)下的绝对时钟还原。
+
+    2026-10-27 起录制不再逐包打墙钟(那会把 PTS 压扁、让音轨采样数与视轨脱钩),
+    FLV tag 回到"推流端相对毫秒"。字幕锚点靠 align.json 里
+    clock_offset_ms = 墙钟 − 末包源ts 还原,采样取**最小值**(≈最小缓冲延迟)。
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.d = self.dir.name
+        self.stem = "主播甲-20261027-160000"
+        self.pattern = os.path.join(self.d, self.stem + "-%03d.flv")
+        # 源流相对时间戳:首包 2441226 ms(≈40 分钟),远小于 RELATIVE_TS_MAX
+        self.rel0 = 2_441_226
+        for i in range(2):
+            _make_flv(os.path.join(self.d, "%s-%03d.flv" % (self.stem, i)),
+                      [(9, self.rel0 + i * 600_000),
+                       (9, self.rel0 + i * 600_000 + 599_000)])
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_relative_ts_needs_offset(self):
+        p = os.path.join(self.d, "%s-000.flv" % self.stem)
+        self.assertIsNone(subtitle.flv_first_av_ts_abs(p),
+                          "没有 clock_offset 时不能凭空编绝对时间")
+        now = int(time.time() * 1000)
+        self.assertEqual(subtitle.flv_first_av_ts_abs(p, now), self.rel0 + now)
+
+    def test_note_clock_offset_keeps_minimum(self):
+        self.assertEqual(subtitle.note_clock_offset(self.pattern, 5000), 5000)
+        self.assertEqual(subtitle.note_clock_offset(self.pattern, 9000), 5000,
+                         "更大的采样不能覆盖最小延迟")
+        self.assertEqual(subtitle.note_clock_offset(self.pattern, 3000), 3000)
+        self.assertEqual(subtitle.clock_offset(subtitle.load_align(self.pattern)), 3000)
+
+    def test_note_clock_offset_rejects_garbage(self):
+        subtitle.note_clock_offset(self.pattern, 4000)
+        subtitle.note_clock_offset(self.pattern, -1)
+        subtitle.note_clock_offset(self.pattern, int(time.time() * 1000) + 10_000)
+        self.assertEqual(subtitle.clock_offset(subtitle.load_align(self.pattern)), 4000,
+                         "越界样本(解析到垃圾字节)不能毒化最小值")
+
+    def test_anchor_uses_clock_offset(self):
+        now = int(time.time() * 1000)
+        subtitle.note_clock_offset(self.pattern, now)
+        align = subtitle.load_align(self.pattern)
+        segs = subtitle.anchor_segments(self.pattern, align)
+        self.assertEqual(len(segs), 2)
+        self.assertEqual(segs[0][2], self.rel0 + now, "锚点 = 首包源ts + 偏移")
+        self.assertEqual(segs[1][2], self.rel0 + 600_000 + now,
+                         "跨分片锚点必须跟着源时间戳连续走")
+
+    def test_old_form_ignores_offset(self):
+        """旧文件(tag 已是墙钟)即使 align 里有偏移,也必须走解回绕通道。"""
+        old = os.path.join(self.d, "旧场次-20260920-120000-000.flv")
+        t0 = int(time.time() * 1000)
+        _make_flv(old, [(9, t0), (9, t0 + 1000)])
+        got = subtitle.flv_first_av_ts_abs(old, 1)
+        self.assertIsNotNone(got)
+        self.assertAlmostEqual(got, t0, delta=2)
+
+
+class TestLastTsRescan(unittest.TestCase):
+    """录制中的文件末尾常压在半个 tag 上,严格版读不到 → 需要窗口回扫。
+
+    这是 2026-10-27 加时钟偏移采样时发现的:录制中连试 3 次 `flv_last_ts` 全是
+    None,采样采不到 → 锚点退化为 birthtime(字幕整体漂移 1~3s)。回扫按
+    「type 合法 + 紧随的 prevSize 对得上」找最后一个自洽 tag。
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "tail.flv")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_finds_last_complete_tag_when_tail_is_partial(self):
+        t0 = 1_000_000
+        _make_flv(self.path, [(9, t0), (9, t0 + 45), (9, t0 + 90)])
+        # 追加"半个 tag":只有 tag 头 + 一小段 body,没有 prevSize
+        with open(self.path, "ab") as f:
+            f.write(_flv_tag(9, t0 + 135)[:20])
+        self.assertIsNone(subtitle.flv_last_ts(self.path),
+                          "严格版对半截 tag 必须返回 None(自洽校验)")
+        self.assertEqual(subtitle.flv_last_ts_any(self.path), t0 + 90,
+                         "回扫要退回最后一个完整 tag,不能编出半个的 ts")
+
+    def test_clean_file_still_works(self):
+        t0 = 1_000_000
+        _make_flv(self.path, [(9, t0), (9, t0 + 45)])
+        self.assertEqual(subtitle.flv_last_ts_any(self.path), t0 + 45)
+
+    def test_bad_file_returns_none(self):
+        with open(self.path, "wb") as f:
+            f.write(b"not a flv at all..........................")
+        self.assertIsNone(subtitle.flv_last_ts_any(self.path))

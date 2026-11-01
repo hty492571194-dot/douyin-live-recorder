@@ -56,13 +56,15 @@
   },
   "recorder": {
     "output_dir": "",
+    "output_dir_switch": "next_session",
     "enabled": true,
     "format": "flv",
     "bitrate": "",
     "segment_time": 0,
     "stall_seconds": 90,
     "stall_max_restarts": 4,
-    "stall_cooldown": 600
+    "stall_cooldown": 600,
+    "stream_await_seconds": 900
   },
   "on_live_command": "echo '[record] {name} live room_id={room_id}'",
   "on_offline_command": "echo '[stop] {name} offline'",
